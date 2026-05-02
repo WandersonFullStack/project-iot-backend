@@ -1,7 +1,20 @@
+import logging
+
 mqtt_broker_configs = {
     "HOST": "localhost",
     "PORT": 1883,
     "CLIENT_NAME": "client_project",
     "KEEPPALIVE": 60,
-    "TOPIC": "/messages"
+    "TOPIC": [
+        ("home/sensors/#", 1),  # (tópico, QoS)
+        ("home/alerts", 2),
+    ],
+    "DB_PATH": "mqtt_data.db"
 }
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(menssage)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
