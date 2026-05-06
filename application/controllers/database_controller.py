@@ -144,5 +144,5 @@ class DatabaseController:
                 FROM received_messages
                 ORDER BY id DESC LIMIT ?
                 """,
-                (limit)
+                (limit,),
             ).fetchall()

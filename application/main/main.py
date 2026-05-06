@@ -1,16 +1,33 @@
 import time
 
-from application.config.broker_configs import mqtt_broker_configs
-from application.main.mqtt_connection.mqtt_client_connection import MqttClientConnection
+from application.controllers.database_controller import DatabaseController
+from application.config.broker_configs import mqtt_broker_configs as config, log
+from application.controllers.callbacks_mqtt_controller import CallbacksMQTTContrller
 
 def start():
-    mqtt_client_connection = MqttClientConnection(
-        mqtt_broker_configs["HOST"],
-        mqtt_broker_configs["PORT"],
-        mqtt_broker_configs["CLIENT_NAME"],
-        mqtt_broker_configs["KEEPPALIVE"]
+    db = DatabaseController(config["DB_PATH"])
+    ctr1 = CallbacksMQTTContrller(db)
+
+    # Publicar uma mensagem de status com propriedades
+    time.sleep(0.1) # aguarda conexão estabelecer
+    ctr1._publicar(
+        "home/status",
+        '{"status": "online", "protocolo": "MQTTv5"}',
+        qos=1,
+        content_type="application/json",
+        user_properties=[("client", config["CLIENT_ID"])],
+        expiry_interval=3600,
     )
 
-    mqtt_client_connection.start_connection()
-
-    while True: time.sleep(0.001)
+    try:
+        while True:
+            time.sleep(5)
+            msgs = db.ultimas_mensagens(3)
+            if msgs:
+                log.info("=== Últimas mensagens no banco ===")
+                for m in msgs:
+                    log.info(" [%s] %s -> %s", m["received_in"][:19], m["topic"], m["payload"])
+    except KeyboardInterrupt:
+        log.info("Encerrando...")
+    finally:
+        ctr1.parar()
