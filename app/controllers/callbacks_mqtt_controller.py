@@ -1,9 +1,14 @@
+from __future__ import annotations
+import asyncio
+import logging
+from typing import Callable
+
 import paho.mqtt.client as mqtt
 from paho.mqtt.properties import Properties
 from paho.mqtt.packettypes import PacketTypes
 
 from .database_controller import DatabaseController
-from application.config.broker_configs import mqtt_broker_configs as config, log
+from app.config.broker_configs import mqtt_broker_configs as config, log
 
 class CallbacksMQTTContrller:
     """
@@ -13,6 +18,11 @@ class CallbacksMQTTContrller:
 
     def __init__(self, db: DatabaseController):
         self.db = db
+        self._connected = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+        # Conjunto de filas - uma por WebSocket conectado.
+        self._ws_queues: set[asyncio.Queue] = set()
 
         # Criação do cliente
         self.client = mqtt.Client(
@@ -27,7 +37,29 @@ class CallbacksMQTTContrller:
         self.client.on_subscribe = self. _on_subscribe
         self.client.on_message = self._on_message
         self.client.on_publish = self._on_publish
-        self.client.on_log = self._on_log
+
+    # -> Registro de WebSocket queues
+
+    def register_ws_queue(self, q: asyncio.Queue):
+        """Chamado quando um cliente WebSocket conecta."""
+        self._ws_queues.add(q)
+
+    def remove_ws_queue(self, q: asyncio.Queue):
+        """Chamado quando um cliente WebSocket desconecta."""
+        self._ws_queues.discard(q)
+
+    def _broadcast_for_ws(self, data: dict):
+        """Envia `data` para todas as filas de WebSocket registradas."""
+
+        if not self._loop:
+            return
+        for q in list(self._ws_queues):
+            try:
+                self._loop.call_soon_threadsafe(q.put_nowait, data)
+            except asyncio.QueueFull:
+                log.warning("WebSocket queue cheia - mensagem descartada")
+
+    # -> Callbacks MQTT
 
     def _on_connect(self, client, userdata, connect_flags, reason_code, properties):
         """
@@ -36,7 +68,7 @@ class CallbacksMQTTContrller:
 
         if reason_code.value == 0:
             log.info(
-                "Conectado | session_present=%s | props=%s",
+                "MQTT Conectado | session_present=%s | props=%s",
                 connect_flags.session_present,
                 properties,
             )
@@ -44,20 +76,15 @@ class CallbacksMQTTContrller:
             # Montar propriedade de assinatura
             self._subscribe_topics()
         else:
-            log.error("Falha na conexão: %s (%d)", reason_code.getName(), reason_code.value)
+            log.error("MQTT Falha na conexão: %s (%d)", reason_code.getName(), reason_code.value)
 
     def _subscribe_topics(self):
         """
         Constrói as propriedades de SUBISCRIBE do MQTT e assina os tópicos.
         """
-        props_sensors = Properties(PacketTypes.SUBSCRIBE)
-        props_sensors.SubscriptionIdentifier = 1
-        props_sensors.UserProperty = [("app", "monitor_mqtt")]
-
-        props_alert = Properties(PacketTypes.SUBSCRIBE)
-        props_alert.SubscriptionIdentfier = 2
-
-        for (topic, qos), props in zip(config["TOPIC"], [props_sensors, props_alert]):
+        props = Properties(PacketTypes.SUBSCRIBE)
+        props.SubscriptionIdentifier = 1
+        for (topic, qos), props in zip(config["TOPIC"], [props, props]):
             result, mid = self.client.subscribe(topic, qos=qos, properties=props)
             log.info("SUBSCRIBE enviado | tópico='%s' qos=%d mid=%d", topic, qos, mid)
 
@@ -65,10 +92,11 @@ class CallbacksMQTTContrller:
         """
         Chamado quando a conexão com o broker é encerrada.
         """
+        self._connected = False
 
         reason = reason_code.getName() if reason_code else "desconhecido"
         origin = "broker" if disconnect_flags.is_disconnect_packet_from_server else "client"
-        log.warning("Desconectado | origem=%s motivo='%s'", origin, reason)
+        log.warning("MQTT Desconectado | origem=%s motivo='%s'", origin, reason)
 
     def _on_subscribe(self, client, userdata, mid, reason_codes, properties):
         """
@@ -77,7 +105,7 @@ class CallbacksMQTTContrller:
 
         for i, rc in enumerate(reason_codes):
             if rc.value <= 2:
-                log.info("SUBACK |mid=%d tópico[%d] QoS_concedido=%", mid, i, rc.value)
+                log.info("SUBACK |mid=%d tópico[%d] QoS_concedido=%d", mid, i, rc.value)
             else:
                 log.error("SUBACK recusado | mid=%d tópico[%d] erro='%s'", mid, i, rc.getName())
 
@@ -88,45 +116,32 @@ class CallbacksMQTTContrller:
 
         topic = message.topic
         payload = message.payload.decode("utf-8", errors="replace")
-        qos = message.qos
-        retain = message.retain
         props = message.properties
 
         # Extrair propriedades
         content_type = getattr(props, "ContentType", None)
         user_props = str(getattr(props, "UserProperty", [])) or None
-        sub_ids = getattr(props, "SubscriptionIdentifier", [])
-        resp_topic = getattr(props, "ResponseTopic", None)
-        corr_data = getattr(props, "CorrelationData", None)
-
-        log.info(
-            "MSG | tópico='%s' qos=%d retain=%s sub_id=%s content_type=%s",
-            topic, qos, retain, sub_ids, content_type,
-        )
 
         # Persistir no banco
-        row_id = self.db.inserir_mensagens(
+        row_id = self.db.insert_messages(
             topic=topic,
             payload=payload,
-            qos=qos,
-            retain=retain,
+            qos=message.qos,
+            retain=message.retain,
             content_type=content_type,
             user_props=user_props,
         )
-        log.info("Mensagem salva no banco | id=%d", row_id)
+        log.info("Mensagem recebida id=%d topic='%s'", row_id, topic)
 
-        # Roteamento por tópico
-        if "temperatura" in topic:
-            self._tratar_temperatura(payload)
-        elif "umidade" in topic:
-            self._tratar_umidade(payload)
-        elif "alertas" in topic:
-            self._tratar_alerta(payload)
-
-        # Padrão Request/Reply do MQTT
-        if resp_topic and corr_data:
-            response = f'{{"status": "ok", "echo": {payload}"}}'
-            self._publicar(resp_topic, response, qos=1, correlation_data=corr_data)
+        # Broadcast para WebSockets
+        self._broadcast_for_ws({
+            "id": row_id,
+            "topic": topic,
+            "payload": payload,
+            "qos": message.qos,
+            "retain": message.retain,
+            "content_type": content_type,
+        })
 
     def _on_publish(self, client, userdata, mid, reason_code, properties):
         """
@@ -141,30 +156,22 @@ class CallbacksMQTTContrller:
         name = reason_code.getName() if reason_code else "-"
         if not reason_code or reason_code.value in (0x00, 0x10):
             log.info("PUBACK | mid=%d reason='%s'", mid, name)
-            self.db.confirmar_publicacao(mid)
+            self.db.confirm_publication(mid)
         else:
             log.error("Puvlicação falhou | mid=%d reason='%s'", mid, name)
 
-    def _on_log(self, client, userdata, level, buf):
-        """
-        Callback de diagnóstico do Paho. Utilizar só durante
-        o desenvolvimento para depurar proplemas de protocolo.
-        """
-
-        if level == mqtt.MQTT_LOG_ERR:
-            log.debug("[PAHO ERR] %s", buf)
 
     # PUBLICAÇÃO COM PROPRIEDADES
-    def _publicar(
+    def _publish(
             self,
             topic: str,
             payload: str,
             qos: int = 1,
+            retain: bool = False,
             content_type: str = "application/json",
-            correlation_data: bytes | None = None,
-            user_properties: list[tuple[str, str]] | None =None,
             expiry_interval: int | None = None,
-    ):
+            user_properties: list[tuple[str, str]] | None =None,
+    ) -> tuple[int, int]:
         """
         Publica uma mensagem com propriedades MQTT.
         """
@@ -173,57 +180,31 @@ class CallbacksMQTTContrller:
         props.ContentType = content_type
         props.PayloadFormatIndicator = 1 #UTF-8
 
-        if correlation_data:
-            props.CorrelationData = correlation_data
         if user_properties:
             props.UserProperty = user_properties
         if expiry_interval:
             props.MessageExpiryInterval = expiry_interval
 
-        info = self.client.publish(topic, payload, qos=qos, properties=props)
+        info = self.client.publish(topic, payload, qos=qos, retain=retain, properties=props)
         # info.rc: código de retorno imediato (não é a confirmação do broker)
         # info.mid: message-id para rastrear no on_plublish
-        self.db.registrar_publicacao(topic, payload, qos, info.mid)
+        self.db.register_publication(topic, payload, qos, info.mid)
         log.info("PUBLISH enfileirado | tópico='%s' mid=%d", topic, info.mid)
 
-        return info
+        return info.rc, info.mid
     
-    # HANDLERS DE NEGÓCIO
-    def _tratar_temperatura(self, value_str: str):
-        try:
-            value = float(value_str)
-            log.info(" -> Temperatura: %.1fC", value)
-            if value > 35.0:
-                self._publicar(
-                    "home/alerts",
-                    f'{{"tipo": "temperatura_alta", "valor": {value}}}',
-                    qos=2,
-                    expiry_interval=60,
-                    user_properties=[("severidade", "alta")],
-                )
-        except ValueError:
-            log.warning("Payload de temperatura invalido: %s", value_str)
-
-    def _tratar_umidade(self, value_str: str):
-        try:
-            log.info(" -> Umidade: %.1f%%", float(value_str))
-        except ValueError:
-            log.warning("Payload de umidade invalido: %s", value_str)
-
-    def _tratar_alerta(self, payload: str):
-        log.warning(" [ALERTA] %s", payload)
-
     # CONEXÃO COM PROPRIEDADES
-    def conectar(self):
+    def start(self, loop: asyncio.AbstractEventLoop):
         """
-        Conecta ao broker com propriedaes MQTT no pacote CONNECT.
+        Recebe o loop asyncio do FastAPI para uso no bridge de threads.
+        Deve ser chamado dentro do lifespan, após o loop estar ativo.
         """
+        self._loop = loop
 
         props = Properties(PacketTypes.CONNECT)
         props.SessionExpiryInterval = 300
         props.ReceiveMaximum = 20
         props.RequestProblemInformation = 1
-        props.UserProperty = [("app", "monitor_mqtt"), ("versao", "1.0")]
 
         self.client.connect(
                 config["HOST"], 
@@ -231,19 +212,19 @@ class CallbacksMQTTContrller:
                 keepalive=config["KEEPALIVE"],
                 properties=props
             )
+        self.client.loop_start() # thread daemon gerenciada pelo Paho
+        log.info("Controller MQTT started.")
         
-    def iniciar(self):
-        """Conecta e inicia o loop de rede em background."""
-        
-        self.conectar()
-        self.client.loop_start() #thread daemon - não bloqueia
-        log.info("Loop MQTT iniciado em background.")
-
-    def parar(self):
+    def stop(self):
         """Encerra a conexão de forma limpa, publicando o DISCONNECT com props."""
 
         props = Properties(PacketTypes.DISCONNECT)
         props.SessionExpiryInterval = 0 # broker limpa a sessão
         self.client.disconnect(properties=props)
         self.client.loop_stop()
-        log.info("Client disconnected.")
+        self._connected = False
+        log.info("Controller MQTT closed.")
+
+    @property
+    def connected(self) -> bool:
+        return self._connected

@@ -3,7 +3,7 @@ import logging
 mqtt_broker_configs = {
     "HOST": "localhost",
     "PORT": 1883,
-    "CLIENT_ID": "client_project",
+    "CLIENT_ID": "mqtt_client",
     "KEEPALIVE": 60,
     "TOPIC": [
         ("home/sensors/#", 1),  # (tópico, QoS)
