@@ -67,6 +67,7 @@ class CallbacksMQTTContrller:
         """
 
         if reason_code.value == 0:
+            self._connected = True
             log.info(
                 "MQTT Conectado | session_present=%s | props=%s",
                 connect_flags.session_present,
@@ -84,7 +85,7 @@ class CallbacksMQTTContrller:
         """
         props = Properties(PacketTypes.SUBSCRIBE)
         props.SubscriptionIdentifier = 1
-        for (topic, qos), props in zip(config["TOPIC"], [props, props]):
+        for topic, qos in config["TOPIC"]:
             result, mid = self.client.subscribe(topic, qos=qos, properties=props)
             log.info("SUBSCRIBE enviado | tópico='%s' qos=%d mid=%d", topic, qos, mid)
 
@@ -93,10 +94,9 @@ class CallbacksMQTTContrller:
         Chamado quando a conexão com o broker é encerrada.
         """
         self._connected = False
-
-        reason = reason_code.getName() if reason_code else "desconhecido"
         origin = "broker" if disconnect_flags.is_disconnect_packet_from_server else "client"
-        log.warning("MQTT Desconectado | origem=%s motivo='%s'", origin, reason)
+        log.warning("MQTT Desconectado | origem=%s motivo='%s'", origin, 
+                    reason_code.getName() if reason_code else "-")
 
     def _on_subscribe(self, client, userdata, mid, reason_codes, properties):
         """
@@ -105,9 +105,9 @@ class CallbacksMQTTContrller:
 
         for i, rc in enumerate(reason_codes):
             if rc.value <= 2:
-                log.info("SUBACK |mid=%d tópico[%d] QoS_concedido=%d", mid, i, rc.value)
+                log.info("SUBACK |mid=%d topic[%d] QoS=%d", mid, i, rc.value)
             else:
-                log.error("SUBACK recusado | mid=%d tópico[%d] erro='%s'", mid, i, rc.getName())
+                log.error("SUBACK refused | mid=%d topic[%d] %s", mid, i, rc.getName())
 
     def _on_message(self, client, userdata, message):
         """
@@ -131,7 +131,7 @@ class CallbacksMQTTContrller:
             content_type=content_type,
             user_props=user_props,
         )
-        log.info("Mensagem recebida id=%d topic='%s'", row_id, topic)
+        log.info("Received message id=%d topic='%s'", row_id, topic)
 
         # Broadcast para WebSockets
         self._broadcast_for_ws({

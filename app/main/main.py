@@ -113,7 +113,7 @@ def list_messages(
     "/api/v1/messages/{message_id}",
     response_model=MessageOut,
     summary="Search for a message by ID.",
-    tags="Mensagens"
+    tags=["Messages"]
 )
 def search_message(message_id: int, db: DB):
     row = db.search_message(message_id)

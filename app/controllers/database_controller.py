@@ -154,26 +154,26 @@ class DatabaseController:
                     SELECT * FROM received_messages
                     WHERE topic LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?
                     """,
-                    (topic, limit, offset),
+                    (topic, limit, offset,),
                 ).fetchall()
             
             return conn.execute(
                 "SELECT * FROM received_messages ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                (limit, offset,),
             ).fetchall()
         
     def search_message(self, message_id: int) -> sqlite3.Row | None:
         with self._connection() as conn:
             return conn.execute(
                 "SELECT * FROM received_messages WHERE id=?",
-                (message_id)
-            ).fetchall()
+                (message_id,)
+            ).fetchone()
         
     def delete_message(self, message_id: int) -> bool:
         with self._lock, self._connection() as conn:
             cur = conn.execute(
                 "DELETE FROM received_messages WHERE id=?",
-                (message_id)
+                (message_id,)
             )
             return cur.rowcount > 0
         
@@ -181,7 +181,7 @@ class DatabaseController:
         with self._connection() as conn:
             return conn.execute(
                 "SELECT * FROM publications ORDER BY id DESC LIMIT ? OFFSET ?",
-                (limit, offset)
+                (limit, offset,)
             ).fetchall()
         
     def distinct_topics(self) -> list[str]:
@@ -197,7 +197,7 @@ class DatabaseController:
             if topic:
                 return conn.execute(
                     "SELECT COUNT(*) FROM received_messages WHERE topic LIKE ?",
-                    (topic)
+                    (topic,)
                 ).fetchall()[0]
             
             return conn.execute(
