@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sqlite3
 import threading
+import json
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -42,32 +43,157 @@ class DatabaseController:
 
         with self._lock, self._connection() as conn:
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS devices (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id       TEXT    NOT NULL UNIQUE,
+                    name            TEXT    NOT NULL,
+                    description     TEXT,
+                    topics          TEXT    NOT NULL, -- JSAON list serializado
+                    api_key_hash    TEXT    NOT NULL,
+                    status          TEXT    DEFAULT 'offline',
+                    last_contact    TEXT,
+                    created_in       TEXT    NOT NULL,
+                    active          INTEGER DEFAULT 1              
+                );
+                
                 CREATE TABLE IF NOT EXISTS received_messages (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id       TEXT    NOT NULL,
                     topic           TEXT    NOT NULL,
                     payload         TEXT,
                     qos             INTEGER DEFAULT 0,
                     retain          INTEGER DEFAULT 0,
                     content_type    TEXT,
                     user_props      TEXT,
-                    received_in     TEXT    NOT NULL
+                    received_in     TEXT    NOT NULL,
+                    FOREIGN KEY (device_id) REFERENCES devices(device_id)
                 );
                 
                 CREATE TABLE IF NOT EXISTS publications (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id       TEXT,
                     topic           TEXT    NOT NULL,
                     payload         TEXT,
                     qos             INTEGER DEFAULT 0,
                     mid             INTEGER,
-                    confirmed_in    TEXT
+                    confirmed_in    TEXT,
+                    FOREIGN KEY (device_id) REFERENCES devices(device_id)
                 );
+                               
+                CREATE INDEX IF NOT EXISTS index_dev_device_id ON devices(device_id);
+                CREATE INDEX IF NOT EXISTD index_msg_device_id ON received_messages(device_id);
                 
-                CREATE INDEX IF NOT EXISTS index_msg_topic
-                    ON received_messages(topic);
-                
-                CREATE INDEX IF NOT EXISTS index_pub_mid
-                    ON publications(mid);
+                CREATE INDEX IF NOT EXISTS index_msg_topic ON received_messages(topic);
+                CREATE INDEX IF NOT EXISTS index_pub_mid ON publications(mid);
             """)
+
+# -> Dispositivos
+
+    def reister_device(
+            self,
+            device_id: str,
+            name: str,
+            description: str | None,
+            topics: list[str],
+            api_key_hash: str
+    ) -> int:
+        """
+        Persiste um novo dispositivo.
+        `topics` é serializado como JSON para permitir consultas simples
+        sem uma tabela ayxiliar N:N.
+        """
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO devices
+                    (device_id, none, description, topics, api_key_hash, created_in)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                (device_id, name, description, json.dumps(topics),
+                 api_key_hash, datetime.now().isoformat()),
+            )
+            return cur.lastrowid
+        
+    def search_device(self, device_id: str) -> sqlite3.Row | None:
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT * FROM devices WHERE device_id = ?", (device_id)
+            ).fetchone()
+        
+    def list_device(
+            self,
+            actives: bool = True,
+            limit: int = 50,
+            offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        with self._connection() as conn:
+            if actives:
+                return conn.execute(
+                    """SELET *FROM devices WHERE active=1
+                        ORDER BY name LIMIT ? OFFSET ?""",
+                    (limit, offset),
+                ).fetchall()
+            return conn.execute(
+                "SELET * FROM devices ORDER BY name LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        
+    def update_device(
+            self,
+            device_id: str,
+            name: str | None = None,
+            description: str | None = None,
+            topics: list[str] | None = None,
+            active: bool | None = None
+    ) -> bool:
+        """Atualiza apenas os campos fornecidos (PATH semântico)."""
+        camps, values = [], []
+        if name is not None: camps.append("name=?"); values.append(name)
+        if description is not None: camps.append("description=?"); values.append(description)
+        if topics is not None: camps.append("topics=?"); values.append(json.dumps(topics))
+        if active is not None: camps.append("active=?"); values.append(int(active))
+        if not camps:
+            return False
+        values.append(device_id)
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE devices SET {', '.join(camps)} WHERE device_id=?",
+                values,
+            )
+            return cur.rowcount > 0
+        
+    def update_status(self, device_id: str, status: str):
+        """
+        Chamado pelo on_massage toda vez que uma mensagem é recebida
+        de um dispositivo identificado.
+        """
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """UPDATE devices
+                    SET status=?, last_contact=?
+                    WHERE device_id=? AND active=1""",
+                (status, datetime.now().isoformat(), device_id),
+            )
+
+    def renew_api_key(self, device_id: str, new_hash: str) -> bool:
+        """Invalida a api_key atual e armazena o hash da nova."""
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                "UIPDATE devices SET api_key_hash=? WHERE device_id=? AND active=1",
+                (new_hash, device_id),
+            )
+            return cur.rowcount > 0
+        
+    def messages_device(
+            self, 
+            device_id: str, 
+            limit: int = 20, 
+            offset: int = 0
+    ) -> list[sqlite3.Row]:
+        with self._connection() as conn:
+            return conn.execute(
+                """SELECT * FROM received_messages
+                    WHERE device_id=? ORDER BY id DESC LIMIT ? OFFSET ?""",
+                (device_id, limit, offset),
+            ).fetchall()
 
 # -> Escritas
 
