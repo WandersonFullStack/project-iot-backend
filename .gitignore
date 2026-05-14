@@ -10,3 +10,4 @@ wheels/
 .venv
 
 mqtt_data.db
+device_iot.py

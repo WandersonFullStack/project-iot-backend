@@ -110,37 +110,54 @@ class CallbacksMQTTContrller:
                 log.error("SUBACK refused | mid=%d topic[%d] %s", mid, i, rc.getName())
 
     def _on_message(self, client, userdata, message):
-        """
-        Chamado para cada mensagem recebida nos tópicos asinados.
+        """ 
+        Identificação de dispositivo via UserProperty.
         """
 
         topic = message.topic
         payload = message.payload.decode("utf-8", errors="replace")
         props = message.properties
 
-        # Extrair propriedades
         content_type = getattr(props, "ContentType", None)
-        user_props = str(getattr(props, "UserProperty", [])) or None
+        user_props_raw = getattr(props, "UserProperty", []) or []
+        user_props_str = str(user_props_raw) if user_props_raw else None
+
+        # Extrair device_id das UserProperties
+        device_id = None
+        for key, value in user_props_raw:
+            if key == "device_id":
+                device_id = value
+                break
+
+        # Atualizar status do dispositivo se identificado
+        if device_id:
+            device = self.db.search_device(device_id)
+            if device and device["active"]:
+                self.db.update_status(device_id, "online")
+                log.info("MSG of device '%s' | topic='%s'", device_id,topic)
+            else:
+                log.warning("MSG with unknown/inactive device_id: '%s'", device_id)
+                device_id = None    # não vincula ao banco se não existe
 
         # Persistir no banco
         row_id = self.db.insert_messages(
+            device_id=device_id,
             topic=topic,
             payload=payload,
             qos=message.qos,
             retain=message.retain,
             content_type=content_type,
-            user_props=user_props,
+            user_props=user_props_str,
         )
-        log.info("Received message id=%d topic='%s'", row_id, topic)
 
         # Broadcast para WebSockets
         self._broadcast_for_ws({
             "id": row_id,
+            "device_id": device_id,
             "topic": topic,
             "payload": payload,
             "qos": message.qos,
             "retain": message.retain,
-            "content_type": content_type,
         })
 
     def _on_publish(self, client, userdata, mid, reason_code, properties):

@@ -6,8 +6,8 @@ mqtt_broker_configs = {
     "CLIENT_ID": "mqtt_client",
     "KEEPALIVE": 60,
     "TOPIC": [
-        ("home/sensors/#", 1),  # (tópico, QoS)
-        ("home/alerts", 2),
+        ("house/sensors/#", 1),  # (tópico, QoS)
+        ("house/alerts", 2),
     ],
     "DB_PATH": "mqtt_data.db"
 }

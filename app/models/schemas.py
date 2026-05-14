@@ -5,7 +5,7 @@ from datetime import datetime
 
 class DeviceIn(BaseModel):
     """Payload para registrar um novo dispositivo."""
-    name: str = Field(..., min_length=2, max_length=80, examples="Room sensor")
+    name: str = Field(..., min_length=2, max_length=80, examples=["Room sensor"])
     description: Optional[str] = Field(default=None, max_length=255)
     topics: list[str] = Field(
         ...,
@@ -29,7 +29,7 @@ class DeviceOut(BaseModel):
     topics: list[str]
     status: str
     last_contact: Optional[datetime]
-    create_in: datetime
+    created_in: datetime
     active: bool
 
     model_config = {"from_attributes": True}
@@ -63,7 +63,7 @@ class MessageOut(BaseModel):
     model_config = {"from_attributes": True}
 
 class PublicationIn(BaseModel):
-    topic: str = Field(..., exemples=["house/sensors/temperature"])
+    topic: str = Field(..., examples=["house/sensors/temperature"])
     payload: str = Field(..., examples=['{"value": 23.5}'])
     qos: int = Field(default=1, ge=0, le=2)
     retain: bool = False

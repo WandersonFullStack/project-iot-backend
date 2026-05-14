@@ -3,6 +3,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
+from datetime import datetime, timedelta
 
 from fastapi import (
     Depends, FastAPI, HTTPException, Query,
@@ -17,17 +18,45 @@ from app.models.schemas import (
     StatusOut, PagesParams
 )
 from app.config.broker_configs import log, mqtt_broker_configs as config
+from app.routes.router_devices import router as devices_router
 
 # == INSTÂNCIAS GLOBAIS ===============================================
 db = DatabaseController("mqtt_data.db")
 mqtt = CallbacksMQTTContrller(db)
+
+async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
+    """
+    Tarefa asyncio que roda em background e marca como offline qualquer
+    dispositivo que não publicou mensagem nos últimos minutos.
+    """
+    limit = datetime.now() - timedelta(minutes=timeout_min)
+    with db._lock, db._connection() as conn:
+        conn.execute(
+            """UPDATE devices
+                SET status='offline'
+                WHERE status='online'
+                    AND (last_contact IS NULL OR last_contact < ?)
+                    AND active=1""",
+            (limit.isoformat(),),
+        )
 
 # == LIFESPAN -> startup e shutdown gerenciados pelo FastAPI===========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     mqtt.start(loop) # conecta ao broker e inicia loop_start()
+
+    # iniciar monitoramento de dispositivos offline em background
+    async def _loop_monitor():
+        while True:
+            await asyncio.sleep(60)
+            await _monitor_offline_devices(timeout_min=5)
+
+    task = asyncio.create_task(_loop_monitor())
+
     yield # aplicação rodando
+    
+    task.cancel()
     mqtt.stop() # disconnect + loop_stop()
 
 # == APP ==============================================================
@@ -37,6 +66,7 @@ app = FastAPI(
     description="Publica e recebe mensagens MQTT via REST e WebSocket.",
     lifespan=lifespan
 )
+app.include_router(devices_router)
 
 # == DEPENDÊNCIAS -> injetadas via Depends()
 def get_db() -> DatabaseController:

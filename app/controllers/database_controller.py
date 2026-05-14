@@ -81,7 +81,7 @@ class DatabaseController:
                 );
                                
                 CREATE INDEX IF NOT EXISTS index_dev_device_id ON devices(device_id);
-                CREATE INDEX IF NOT EXISTD index_msg_device_id ON received_messages(device_id);
+                CREATE INDEX IF NOT EXISTS index_msg_device_id ON received_messages(device_id);
                 
                 CREATE INDEX IF NOT EXISTS index_msg_topic ON received_messages(topic);
                 CREATE INDEX IF NOT EXISTS index_pub_mid ON publications(mid);
@@ -89,7 +89,7 @@ class DatabaseController:
 
 # -> Dispositivos
 
-    def reister_device(
+    def register_device(
             self,
             device_id: str,
             name: str,
@@ -100,12 +100,12 @@ class DatabaseController:
         """
         Persiste um novo dispositivo.
         `topics` é serializado como JSON para permitir consultas simples
-        sem uma tabela ayxiliar N:N.
+        sem uma tabela auxiliar N:N.
         """
         with self._lock, self._connection() as conn:
             cur = conn.execute(
                 """INSERT INTO devices
-                    (device_id, none, description, topics, api_key_hash, created_in)
+                    (device_id, name, description, topics, api_key_hash, created_in)
                     VALUES (?, ?, ?, ?, ?, ?)""",
                 (device_id, name, description, json.dumps(topics),
                  api_key_hash, datetime.now().isoformat()),
@@ -115,19 +115,19 @@ class DatabaseController:
     def search_device(self, device_id: str) -> sqlite3.Row | None:
         with self._connection() as conn:
             return conn.execute(
-                "SELECT * FROM devices WHERE device_id = ?", (device_id)
+                "SELECT * FROM devices WHERE device_id = ?", (device_id,),
             ).fetchone()
         
     def list_device(
             self,
-            actives: bool = True,
+            active_only: bool = True,
             limit: int = 50,
             offset: int = 0,
     ) -> list[sqlite3.Row]:
         with self._connection() as conn:
-            if actives:
+            if active_only:
                 return conn.execute(
-                    """SELET *FROM devices WHERE active=1
+                    """SELECT * FROM devices WHERE active=1
                         ORDER BY name LIMIT ? OFFSET ?""",
                     (limit, offset),
                 ).fetchall()
@@ -177,7 +177,7 @@ class DatabaseController:
         """Invalida a api_key atual e armazena o hash da nova."""
         with self._lock, self._connection() as conn:
             cur = conn.execute(
-                "UIPDATE devices SET api_key_hash=? WHERE device_id=? AND active=1",
+                "UPDATE devices SET api_key_hash=? WHERE device_id=? AND active=1",
                 (new_hash, device_id),
             )
             return cur.rowcount > 0
@@ -324,14 +324,14 @@ class DatabaseController:
                 return conn.execute(
                     "SELECT COUNT(*) FROM received_messages WHERE topic LIKE ?",
                     (topic,)
-                ).fetchall()[0]
+                ).fetchone()[0]
             
             return conn.execute(
                 "SELECT COUNT(*) FROM received_messages"
-            ).fetchall()[0]
+            ).fetchone()[0]
         
     def tell_publications(self) -> int:
         with self._connection() as conn:
             return conn.execute(
-                "SELECT COUNT(*) FROM plublications"
-            ).fetchall()[0]
+                "SELECT COUNT(*) FROM publications"
+            ).fetchone()[0]
