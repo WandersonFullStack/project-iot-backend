@@ -19,6 +19,9 @@ from app.models.schemas import (
 )
 from app.config.broker_configs import log, mqtt_broker_configs as config
 from app.routes.router_devices import router as devices_router
+from app.services.tcp_gateway import TCPGateway
+from app.services.modbus_gateway import ModbusGateway
+from app.services.protocol_bridge import ProtocolBridge
 
 # == INSTÂNCIAS GLOBAIS ===============================================
 db = DatabaseController("mqtt_data.db")
@@ -44,7 +47,15 @@ async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
-    mqtt.start(loop) # conecta ao broker e inicia loop_start()
+    bridge = ProtocolBridge(db, mqtt)
+
+    tcp_gw = TCPGateway(bridge, host="0.0.0.0", port=9000)
+    modbus_gw = ModbusGateway(bridge, host="0.0.0.0", port=9000)
+
+    # Inicia todos os servidores concorrentemente
+    mqtt.start(loop)
+    await tcp_gw.start()
+    await modbus_gw.start()
 
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
@@ -57,6 +68,8 @@ async def lifespan(app: FastAPI):
     yield # aplicação rodando
     
     task.cancel()
+    await tcp_gw.stop()
+    await modbus_gw.stop()
     mqtt.stop() # disconnect + loop_stop()
 
 # == APP ==============================================================
