@@ -20,7 +20,7 @@ from app.models.schemas import (
 from app.config.broker_configs import log, mqtt_broker_configs as config
 from app.routes.router_devices import router as devices_router
 from app.services.tcp_gateway import TCPGateway
-from app.services.modbus_gateway import ModbusGateway
+from app.services.modbus_gateway import ModbusGateway, MapRegister
 from app.services.protocol_bridge import ProtocolBridge
 
 # == INSTÂNCIAS GLOBAIS ===============================================
@@ -48,9 +48,10 @@ async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     bridge = ProtocolBridge(db, mqtt)
+    register = [MapRegister]
 
     tcp_gw = TCPGateway(bridge, host="0.0.0.0", port=9000)
-    modbus_gw = ModbusGateway(bridge, host="0.0.0.0", port=9000)
+    modbus_gw = ModbusGateway(bridge, map=register, host="0.0.0.0", port=502)
 
     # Inicia todos os servidores concorrentemente
     mqtt.start(loop)

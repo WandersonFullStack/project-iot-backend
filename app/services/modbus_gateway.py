@@ -10,7 +10,7 @@ from pymodbus.datastore import (
     ModbusSparseDataBlock,
 )
 from pymodbus.server import StartAsyncTcpServer
-from pymodbus.device import ModbusDeviceIdentification
+from pymodbus.pdu.device import ModbusDeviceIdentification
 
 from app.services.protocol_bridge import ProtocolBridge
 from app.config.broker_configs import log
@@ -108,12 +108,12 @@ class ModbusGateway:
         """
         datablock = CallbackDataBlock(self.map, self._on_writing)
         slave = ModbusDeviceContext(
-            di=ModbusSparseDataBlock({}),
-            co=ModbusSparseDataBlock({}),
             hr=datablock,   # holding registers com callback
-            ir=ModbusSparseDataBlock({})
+            # di=ModbusSparseDataBlock({}),
+            # co=ModbusSparseDataBlock({}),
+            # ir=ModbusSparseDataBlock({})
         )
-        return ModbusServerContext(slave={0xFF: slave}, single=False)
+        return ModbusServerContext(devices={0xFF: slave})
     
     def _build_identity(self) -> ModbusDeviceIdentification:
         """
