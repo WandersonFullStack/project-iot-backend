@@ -1,7 +1,105 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
+from enum import Enum
+
+class TypeRegister(str, Enum):
+    holding = "holding"   # FC 03/06/16 -> leitura/escrita, 16 bits
+    coil = "coil"   # FC 01/05/15 -> leitura/escrita, 1 bit (saidas digitais)
+    input = "input"   #FC 04 -> somente leitura, 16 bits (entradas analógicas)
+    discrete = "discrete"   # FC 02 -> somente leitura, 1 bit (entradas digitais)
+
+class PLCIn(BaseModel):
+    device_id: str = Field(..., description="UUID of the associated device")
+    name: str = Field(..., min_length=2, max_length=80)
+    ip: str = Field(..., examples=["192.168.1.10"])
+    port_modbus: int = Field(default=502, ge=1, le=65535)
+    port_tcp: int = Field(default=9000, ge=1, le=65535)
+    protocol: Literal["modbus", "tcp", "ambos"] = "modbus"
+    description: Optional[str] = None
+    unit_id: int = Field(default=255, ge=0, le=255, description="Modbus address of the slave (255=broadcast)")
+    timeout: float = Field(default=5.0, ge=0.5, le=60.0)
+
+class PLCOut(BaseModel):
+    id: int
+    device_id: str
+    name: str
+    description: Optional[str]
+    ip: str
+    port_modbus: int
+    port_tcp: int
+    protocol: str
+    unit_id: int
+    timeout: float
+    active: bool
+    create_in: datetime
+    total_registers: int = 0
+
+    model_config = {"from_attributes": True}
+
+class PLCUpdate(BaseModel):
+    name: Optional[str] = None
+    ip: Optional[str] = None
+    port_modbus: Optional[int] = Field(default=None, ge=1, le=65535)
+    port_tcp: Optional[int] = Field(default=None, ge=1, le=65535)
+    protocol: Optional[Literal["modbus", "tcp", "ambos"]] = None
+    description: Optional[str] = None
+    unit_id: Optional[int] = Field(default=None, ge=0, le=255)
+    timeout: Optional[float] = Field(default=None, ge=0.5, le=60.0)
+    active: Optional[bool] = None
+
+class MapRegisterIn(BaseModel):
+    type: TypeRegister
+    address: int = Field(..., ge=0, le=65534)
+    topic: str = Field(..., examples=["proccess/boiler/temperature"])
+    description: Optional[str] = None
+    unit: Optional[str] = Field(default=None, examples=["°C", "bar", "L/h"])
+    scale: float = Field(default=1.0, description="real_value = gross x scale + offset")
+    offset: float = 0.0
+    qos: int = Field(default=1, ge=0, le=2)
+    read_only: bool = True
+
+class MapRegisterOut(BaseModel):
+    id: int
+    plc_id: int
+    type: str
+    address: int
+    address_modbus: int # calculado: endereço + offset do type
+    topic: str
+    decription: Optional[str]
+    unit: Optional[str]
+    scale: float
+    offset: float
+    qos: int
+    read_only: bool
+    active: bool
+    create_in: datetime
+
+    model_config = {"from_attributes": True}
+
+class MapRegisterUpdate(BaseModel):
+    topic: Optional[str] = None
+    decription: Optional[str] = None
+    unit: Optional[str] = None
+    scale: Optional[float] = None
+    offset: Optional[float] = None
+    qos: Optional[int] = Field(default=None, ge=0, le=2)
+    read_only: Optional[bool] = None
+    active: Optional[bool] = None
+
+class MapBulkIn(BaseModel):
+    """Importação em lote -> usa INSERT OR REPLACE, portanto é idempotente."""
+    registers: list[MapRegisterIn] = Field(..., min_length=1, max_length=500)
+
+class TestConnectionOut(BaseModel):
+    success: bool
+    message: str
+    ip: str
+    pot: int
+    unit_id: int
+    time_ms: Optional[float] = None
+    value_reg0: Optional[int] = None    # valor bruto do registrador 0 (holding)
 
 class DeviceIn(BaseModel):
     """Payload para registrar um novo dispositivo."""
