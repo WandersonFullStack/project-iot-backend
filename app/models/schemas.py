@@ -96,7 +96,7 @@ class TestConnectionOut(BaseModel):
     success: bool
     message: str
     ip: str
-    pot: int
+    port: int
     unit_id: int
     time_ms: Optional[float] = None
     value_reg0: Optional[int] = None    # valor bruto do registrador 0 (holding)

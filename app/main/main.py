@@ -22,10 +22,14 @@ from app.routes.router_devices import router as devices_router
 from app.services.tcp_gateway import TCPGateway
 from app.services.modbus_gateway import ModbusGateway, MapRegister
 from app.services.protocol_bridge import ProtocolBridge
+from app.routes.router_plcs import router as plcs_router
 
 # == INSTÂNCIAS GLOBAIS ===============================================
 db = DatabaseController("mqtt_data.db")
 mqtt = CallbacksMQTTContrller(db)
+bridge = ProtocolBridge(db, mqtt)
+tcp_gw = TCPGateway(bridge)
+modbus_gw = ModbusGateway(bridge)
 
 async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
     """
@@ -43,20 +47,37 @@ async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
             (limit.isoformat(),),
         )
 
+async def reload_map_modbus():
+    """
+    Carrega o mapa atual do banco e reconstrói o datastore do ModbusGateway.
+    Chamada após criar/atualizar/deletar registradores via API.
+    Executa em background para não bloquear a resposta HTTP.
+    """
+    registers = db.load_map_modbus()
+    new_map = [
+        MapRegister(
+            address = r["address"],
+            topic = r["topic"],
+            unit = r["unit"] or "",
+            scale = r["scale"],
+            device_id = r["device_id"],
+        )
+        for r in registers
+    ]
+    modbus_gw.reload_map(new_map)
+    log.info("Map Modbus reloaded: %d registers active.", len(new_map))
+
 # == LIFESPAN -> startup e shutdown gerenciados pelo FastAPI===========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
-    bridge = ProtocolBridge(db, mqtt)
-    register = [MapRegister]
-
-    tcp_gw = TCPGateway(bridge, host="0.0.0.0", port=9000)
-    modbus_gw = ModbusGateway(bridge, map=register, host="0.0.0.0", port=502)
 
     # Inicia todos os servidores concorrentemente
     mqtt.start(loop)
     await tcp_gw.start()
     await modbus_gw.start()
+
+    await reload_map_modbus() # carrego o mapa salvo no banco ao iniciar
 
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
@@ -80,7 +101,7 @@ app = FastAPI(
     description="Publica e recebe mensagens MQTT via REST e WebSocket.",
     lifespan=lifespan
 )
-app.include_router(devices_router)
+app.include_router(devices_router, plcs_router)
 
 # == DEPENDÊNCIAS -> injetadas via Depends()
 def get_db() -> DatabaseController:
