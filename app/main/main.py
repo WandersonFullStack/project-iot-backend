@@ -64,7 +64,7 @@ async def reload_map_modbus():
         )
         for r in registers
     ]
-    modbus_gw.reload_map(new_map)
+    modbus_gw.map = new_map
     log.info("Map Modbus reloaded: %d registers active.", len(new_map))
 
 # == LIFESPAN -> startup e shutdown gerenciados pelo FastAPI===========
@@ -75,9 +75,8 @@ async def lifespan(app: FastAPI):
     # Inicia todos os servidores concorrentemente
     mqtt.start(loop)
     await tcp_gw.start()
+    await reload_map_modbus() # carrega o mapa salvo no banco ao iniciar
     await modbus_gw.start()
-
-    await reload_map_modbus() # carrego o mapa salvo no banco ao iniciar
 
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
@@ -101,7 +100,8 @@ app = FastAPI(
     description="Publica e recebe mensagens MQTT via REST e WebSocket.",
     lifespan=lifespan
 )
-app.include_router(devices_router, plcs_router)
+app.include_router(devices_router)
+app.include_router(plcs_router)
 
 # == DEPENDÊNCIAS -> injetadas via Depends()
 def get_db() -> DatabaseController:

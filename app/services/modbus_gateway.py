@@ -34,7 +34,7 @@ class CallbackDataBlock(ModbusSparseDataBlock):
     """
     def __init__(self, map: list[MapRegister], callback: Callable):
         # Inicializa o store com zeros nos endereços mapeados
-        initial_values = {m.address: 0 for m in map}
+        initial_values = {m.address: 0 for m in map} or {0: 0}
         super().__init__(initial_values)
         self._map_by_address = {m.address: m for m in map}
         self._callback = callback
@@ -106,12 +106,13 @@ class ModbusGateway:
             hr = Holding Registers (leitura/escrita, 16 bits)
             ir = Input Registers (somente leitura, 16 bits)
         """
-        datablock = CallbackDataBlock(self.map, self._on_writing)
+        datablock = CallbackDataBlock(self.map or [], self._on_writing)
+        empty = ModbusSparseDataBlock({0: 0})
         slave = ModbusDeviceContext(
-            hr=datablock,   # holding registers com callback
-            # di=ModbusSparseDataBlock({}),
-            # co=ModbusSparseDataBlock({}),
-            # ir=ModbusSparseDataBlock({})
+            hr=datablock if self.map else empty,   # holding registers com callback
+            di=empty,
+            co=empty,
+            ir=empty
         )
         return ModbusServerContext(devices={0xFF: slave})
     

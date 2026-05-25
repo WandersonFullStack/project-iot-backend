@@ -67,7 +67,7 @@ class MapRegisterOut(BaseModel):
     address: int
     address_modbus: int # calculado: endereço + offset do type
     topic: str
-    decription: Optional[str]
+    description: Optional[str]
     unit: Optional[str]
     scale: float
     offset: float
@@ -80,7 +80,7 @@ class MapRegisterOut(BaseModel):
 
 class MapRegisterUpdate(BaseModel):
     topic: Optional[str] = None
-    decription: Optional[str] = None
+    description: Optional[str] = None
     unit: Optional[str] = None
     scale: Optional[float] = None
     offset: Optional[float] = None

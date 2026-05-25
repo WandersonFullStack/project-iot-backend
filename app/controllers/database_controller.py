@@ -52,7 +52,7 @@ class DatabaseController:
                     api_key_hash    TEXT    NOT NULL,
                     status          TEXT    DEFAULT 'offline',
                     last_contact    TEXT,
-                    created_in       TEXT    NOT NULL,
+                    created_in      TEXT    NOT NULL,
                     active          INTEGER DEFAULT 1              
                 );
                                
@@ -60,7 +60,7 @@ class DatabaseController:
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id       TEXT    NOT NULL,
                     name            TEXT    NOT NULL,
-                    description    TEXT,
+                    description     TEXT,
                     ip              TEXT    NOT NULL,
                     port_modbus     INTEGER DEFAULT 502,
                     port_tcp        INTEGER DEFAULT 9000,
@@ -69,7 +69,7 @@ class DatabaseController:
                     timeout         REAL    DEFAULT 5.0,
                     active          INTEGER DEFAULT 1,
                     create_in       TEXT    NOT NULL,
-                    FOREING KEY (device_id) REFERENCES devices(device_id)
+                    FOREIGN KEY (device_id) REFERENCES devices(device_id)
                 );
                                
                 CREATE TABLE IF NOT EXISTS map_registers (
@@ -78,7 +78,7 @@ class DatabaseController:
                     type            TEXT    NOT NULL,
                     address         INTEGER NOT NULL,
                     topic           TEXT    NOT NULL,
-                    descriptions   TEXT,
+                    description     TEXT,
                     unit            TEXT,
                     scale           REAL    DEFAULT 1.0,
                     offset          REAL    DEFAULT 0.0,
@@ -87,7 +87,7 @@ class DatabaseController:
                     active          INTEGER DEFAULT 1,
                     create_in       TEXT    NOT NULL,
                     UNIQUE(plc_id, type, address),
-                    FOREING KEY (plc_id) REFERENCES plcs(id)               
+                    FOREIGN KEY (plc_id) REFERENCES plcs(id)               
                 );
                 
                 CREATE TABLE IF NOT EXISTS received_messages (
@@ -118,7 +118,7 @@ class DatabaseController:
                 CREATE INDEX IF NOT EXISTS index_msg_device_id ON received_messages(device_id);
                                
                 CREATE INDEX IF NOT EXISTS index_plc_device_id ON plcs(device_id);
-                CREATE INDEX IF NOT EXISTS index_register_plc_id ON map_registers(pls_id);
+                CREATE INDEX IF NOT EXISTS index_register_plc_id ON map_registers(plc_id);
                 CREATE INDEX IF NOT EXISTS index_regster_topic ON map_registers(topic);
                 
                 CREATE INDEX IF NOT EXISTS index_msg_topic ON received_messages(topic);
@@ -343,7 +343,7 @@ class DatabaseController:
                 """INSERT OR IGNORE INTO map_registers
                     (plc_id, type, address, topic, description, unit,
                      scale, offset, qos, read_only, create_in)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (plc_id, type, address, topic, description, unit,
                  scale, offset, qos, int(read_only),
                  datetime.now().isoformat()),
@@ -361,12 +361,12 @@ class DatabaseController:
         with self._lock, self._connection() as conn:
             cur = conn.executemany(
                 """INSERT OR REPLACE INTO map_registers
-                    (plc_id, type, address, topic, decription, unit,
+                    (plc_id, type, address, topic, description, unit,
                      scale, offset, qos, read_only, create_in)
                     VALUES (:plc_id, :type, :address, :topic, :description, :unit,
                         :scale, :offset, :qos, :read_only, :create_in)""",
                 [
-                    {**item, "plc_id": plc_id, "read_only": int(item.get("read_oly", True)), "create_in": now}
+                    {**item, "plc_id": plc_id, "read_only": int(item.get("read_only", True)), "create_in": now}
                     for item in items
                 ],
             )
@@ -387,7 +387,7 @@ class DatabaseController:
             params.append(type)
         if active_only:
             filters.append("active=1")
-        where = " AND".join(filters)
+        where = " AND ".join(filters)
         params += [limit, offset]
         with self._connection() as conn:
             return conn.execute(
@@ -405,7 +405,7 @@ class DatabaseController:
     def update_register(self, register_id: int, plc_id: int, **fields) -> bool:
         map = {
             "topic": "topic",
-            "descriptiond": "description",
+            "description": "description",
             "unit": "unit",
             "scale": "scale",
             "offset": "offset",
@@ -421,7 +421,7 @@ class DatabaseController:
                 values.append(int(v) if field in ("read_only", "active") else v)
         if not sets:
             return False
-        value += [register_id, plc_id]
+        values += [register_id, plc_id]
         with self._lock, self._connection() as conn:
             cur = conn.execute(
                 f"UPDATE map_registers SET {', '.join(sets)} WHERE id=? AND plc_id=?",
@@ -446,7 +446,7 @@ class DatabaseController:
         """
         with self._connection() as conn:
             rows = conn.execute(
-                """SELECT e.*, c.device_id, c.ip, c.unit_id, c.timeout
+                """SELECT r.*, c.device_id, c.ip, c.unit_id, c.timeout
                     FROM map_registers r
                     JOIN plcs c ON r.plc_id = c.id
                     WHERE r.active=1 AND c.active=1
