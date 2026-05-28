@@ -141,7 +141,7 @@ Pag = Annotated[PagesParams, Depends(get_pages)]
 def get_status(db: DB, mqtt: MQTT):
     """
     Retorna o estado atual do cliente MQTT e contagens do banco.
-    Útil para health checks e minitoramento.
+    Útil para health checks e monitoramento.
     """
     return StatusOut(
         mqtt_connected=mqtt.connected,

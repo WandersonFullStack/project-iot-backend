@@ -52,7 +52,7 @@ class PLCUpdate(BaseModel):
 class MapRegisterIn(BaseModel):
     type: TypeRegister
     address: int = Field(..., ge=0, le=65534)
-    topic: str = Field(..., examples=["proccess/boiler/temperature"])
+    topic: str = Field(..., examples=["process/boiler/temperature"])
     description: Optional[str] = None
     unit: Optional[str] = Field(default=None, examples=["°C", "bar", "L/h"])
     scale: float = Field(default=1.0, description="real_value = gross x scale + offset")

@@ -43,6 +43,16 @@ class DatabaseController:
 
         with self._lock, self._connection() as conn:
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id         TEXT    NOT NULL UNIQUE,
+                    name            TEXT    NOT NULL,
+                    email           TEXT    NOT NULL UNIQUE,
+                    password_hash   TEXT    NOT NULL,
+                    active          INTEGER DEFAULT 1,
+                    created_in      TEXT    NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS devices (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     device_id       TEXT    NOT NULL UNIQUE,
@@ -53,7 +63,8 @@ class DatabaseController:
                     status          TEXT    DEFAULT 'offline',
                     last_contact    TEXT,
                     created_in      TEXT    NOT NULL,
-                    active          INTEGER DEFAULT 1              
+                    active          INTEGER DEFAULT 1,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)             
                 );
                                
                 CREATE TABLE IF NOT EXISTS plcs (
@@ -92,7 +103,7 @@ class DatabaseController:
                 
                 CREATE TABLE IF NOT EXISTS received_messages (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id       TEXT    NOT NULL,
+                    device_id       TEXT,
                     topic           TEXT    NOT NULL,
                     payload         TEXT,
                     qos             INTEGER DEFAULT 0,
@@ -113,8 +124,10 @@ class DatabaseController:
                     confirmed_in    TEXT,
                     FOREIGN KEY (device_id) REFERENCES devices(device_id)
                 );
-                               
-                CREATE INDEX IF NOT EXISTS index_dev_device_id ON devices(device_id);
+
+                CREATE INDEX IF NOT EXISTS index_user_id ON users(user_id)
+                                              
+                CREATE INDEX IF NOT EXISTS index_device_user_id ON devices(user_id);
                 CREATE INDEX IF NOT EXISTS index_msg_device_id ON received_messages(device_id);
                                
                 CREATE INDEX IF NOT EXISTS index_plc_device_id ON plcs(device_id);
@@ -124,6 +137,22 @@ class DatabaseController:
                 CREATE INDEX IF NOT EXISTS index_msg_topic ON received_messages(topic);
                 CREATE INDEX IF NOT EXISTS index_pub_mid ON publications(mid);
             """)
+
+    def register_user(
+            self,
+            user_id: str,
+            name: str,
+            email: str,
+            password_hash: str
+    ) -> int:
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO users
+                    (user_id, name, email, password_hash, created_in)
+                    VALUES (?, ?, ?, ?, ?)""",
+                (user_id, name, email, password_hash, datetime.now().isoformat()),
+            )
+            return cur.lastrowid
 
 # -> Dispositivos
 
@@ -458,6 +487,7 @@ class DatabaseController:
 
     def insert_messages(
             self,
+            device_id: str | None,
             topic: str,
             payload: str,
             qos: int,
@@ -474,11 +504,12 @@ class DatabaseController:
             cur = conn.execute(
                 """
                 INSERT INTO received_messages
-                    (topic, payload, qos, retain, content_type, user_props, received_in)
+                    (device_id, topic, payload, qos, retain, content_type, user_props, received_in)
 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    device_id,
                     topic, 
                     payload, 
                     qos, 

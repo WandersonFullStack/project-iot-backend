@@ -11,7 +11,7 @@ from app.models.schemas import (
     DeviceRegisterOut, RenewalKeyOut,
     MessageOut, PagesParams
 )
-from app.auth.auth import generate_api_key, hash_api_key
+from backend.app.auth.device_auth import generate_api_key, hash_api_key
 
 router = APIRouter(prefix="/api/v1/devices", tags=["Devices"])
 
