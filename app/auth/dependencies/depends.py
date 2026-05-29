@@ -1,0 +1,82 @@
+from __future__ import annotations
+from typing import Annotated
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError
+
+from ..user_auth import decode_token
+from app.controllers.database_controller import DatabaseController
+
+_bearer = HTTPBearer(auto_error=True)
+
+def get_db() -> DatabaseController:
+    from app.main.main import db
+    return db
+
+def get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+        db: DatabaseController = Depends(get_db)
+) -> dict:
+    """
+    Dependência principal de autenticação.
+
+    Fluxo:
+      1. Extrai o token do header "Authorization: Bearer <token>"
+      2. Decodifica e valida assinatura + expiração via jose
+      3. Confirma que o usuário ainda existe e está ativo no banco
+         (garante que usuários desativados percam acesso mesmo com token válido)
+
+    Lança 401 em qualquer falha — nunca 403 (não revela se o recurso existe).
+    """
+    try:
+        payload = decode_token(credentials.credentials)
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Malformed token."
+        )
+    
+    user = db.search_user_per_id(int(user_id))
+    if not user or not user["active"]:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found or anactive."
+        )
+    
+    return dict(user)
+
+def require_operator(user: dict = Depends(get_current_user)) -> dict:
+    """Permite admin e operador. Bloqueia leitura."""
+
+    if user["paper"] not in ("admin", "operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permission. Requires 'operator' or 'admin' role."
+        )
+    
+    return user
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    """Permite apenas admin"""
+
+    if user["paper"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permission. Requires 'admin' role."
+        )
+    
+    return user
+
+# Aliases tipados -> assinatura das rotas
+CurrentUser = Annotated[dict, Depends(get_current_user)]
+OperatorUser = Annotated[dict, Depends(require_operator)]
+AdminUser = Annotated[dict, Depends(require_admin)]
