@@ -3,7 +3,7 @@ import sqlite3
 import threading
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 class DatabaseController:
     """
@@ -45,12 +45,24 @@ class DatabaseController:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id         TEXT    NOT NULL UNIQUE,
-                    name            TEXT    NOT NULL,
+                    username        TEXT    NOT NULL UNIQUE,
                     email           TEXT    NOT NULL UNIQUE,
+                    name            TEXT    NOT NULL,
                     password_hash   TEXT    NOT NULL,
+                    paper           TEXT    DEFAULT 'operator',
                     active          INTEGER DEFAULT 1,
-                    created_in      TEXT    NOT NULL
+                    created_in      TEXT    NOT NULL,
+                    login_only      TEXT
+                );
+                               
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id         INTEGER NOT NULL,
+                    token_hash      TEXT    NOT NULL UNIQUE,
+                    created_in      TEXT    NOT NULL,
+                    expires_in      TEXT    NOT NULL,
+                    revoked         INTEGER DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users(id)             
                 );
 
                 CREATE TABLE IF NOT EXISTS devices (
@@ -63,8 +75,7 @@ class DatabaseController:
                     status          TEXT    DEFAULT 'offline',
                     last_contact    TEXT,
                     created_in      TEXT    NOT NULL,
-                    active          INTEGER DEFAULT 1,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)             
+                    active          INTEGER DEFAULT 1,             
                 );
                                
                 CREATE TABLE IF NOT EXISTS plcs (
@@ -125,7 +136,9 @@ class DatabaseController:
                     FOREIGN KEY (device_id) REFERENCES devices(device_id)
                 );
 
-                CREATE INDEX IF NOT EXISTS index_user_id ON users(user_id)
+                CREATE INDEX IF NOT EXISTS index_users_username ON users(username);
+                CREATE INDEX IF NOT EXISTS index_reftokens_token_hash ON refresh_tokens(token_hash);
+                CREATE INDEX IF NOT EXISTS index_reftokens_user_id ON refresh_tokens(user_id);
                                               
                 CREATE INDEX IF NOT EXISTS index_device_user_id ON devices(user_id);
                 CREATE INDEX IF NOT EXISTS index_msg_device_id ON received_messages(device_id);
@@ -138,21 +151,168 @@ class DatabaseController:
                 CREATE INDEX IF NOT EXISTS index_pub_mid ON publications(mid);
             """)
 
+# ->    Usuários
+
     def register_user(
             self,
-            user_id: str,
-            name: str,
+            username: str,
             email: str,
-            password_hash: str
+            name: str,
+            password_hash: str,
+            paper: str = "operator"
     ) -> int:
         with self._lock, self._connection() as conn:
-            cur = conn.execute(
+            try:
+                cur = conn.execute(
                 """INSERT INTO users
-                    (user_id, name, email, password_hash, created_in)
-                    VALUES (?, ?, ?, ?, ?)""",
-                (user_id, name, email, password_hash, datetime.now().isoformat()),
+                    (username, email, name, password_hash, paper, created_in)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                (username, email, name, password_hash, paper, datetime.now().isoformat()),
             )
+                return cur.lastrowid
+            
+            except Exception as e:
+                if "UNIQUE" in str(e):
+                    raise ValueError("username or email already registered")
+                raise
+
+    def search_users_per_id(
+            self,
+            user_id: int
+    ):
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT * FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        
+    def search_user_per_username(
+            self,
+            username: str
+    ):
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT 8 FROM users WHERE username=?", (username,)
+            ).fetchone()
+        
+    def list_users(
+            self,
+            limit: int = 50,
+            offset: int = 0
+    ):
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT * FROM users ORDER BY name LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        
+    def update_user(
+            self,
+            user_id: int,
+            **fields
+    ) -> bool:
+        map = {
+            "name": "name",
+            "email": "email",
+            "paper": "paper",
+            "active": "active",
+            "password_hash": "password_hash"
+        }
+        sets, values = [], []
+        for field, col in map.items():
+            v = fields.get(field)
+            if v is not None:
+                sets.append(f"{col}=?")
+                values.append(int(v) if field == "active" else v)
+        
+        if not sets:
+            return False
+        
+        values.append(user_id)
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE users SET {', '.join(sets)} WHERE id=?", values
+            )
+            
+            return cur.rowcount > 0
+        
+    def update_login_only(
+            self,
+            user_id: int
+    ):
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "UPDATE users SET login_only=? WHERE id=?",
+                (datetime.now().isoformat(), user_id)
+            )
+
+    def count_users(self) -> int:
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM users"
+            ).fetchone()[0]
+        
+# ->    Refresh Tokens
+
+    def create_refresh_token(
+            self,
+            user_id: int,
+            token_hash: str,
+            days: int = 7
+    ) -> int:
+        """
+        Armazena o hash (não o token em claro).
+        A tabela pode conter múltiplos tokens por usuário para suportar
+        múltiplos dispositivos logados simultaneamente.
+        """
+        expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                """INSERT INTO refresh_tokens (user_id, token_hash, created_in, expires_in)
+                    VALUES (?, ?, ?, ?)"""
+                (user_id, token_hash, datetime.now().isoformat(), expires),
+            )
+
             return cur.lastrowid
+        
+    def search_refresh_token(self, tolken_hash: str):
+        with self._connection() as conn:
+            return conn.execute(
+                "SELECT * FROM refresh_tokens WHERE token_hash=? AND revoked=0",
+                (tolken_hash,),
+            ).fetchone()
+        
+    def revoke_refresh_token(
+            self,
+            token_hash: str,
+            user_id: int
+    ) -> bool:
+        """Revoga um token específico (logout de um dispositivo)"""
+
+        with self._lock, self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE refresh_tokens SET revoked=1 WHERE token_hash=? AND user_id=?",
+                (token_hash, user_id),
+            )
+
+            return cur.rowcount > 0
+        
+    def revoke_all_refresh_tokens(self, user_id: int):
+        """Logout de todos os dispositivos -> útil após troca de senha."""
+
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "UPDATE refresh_tokens SET revoked=1 WHERE user_id=?",
+                (user_id,),
+            )
+
+    def clean_refresh_tokens_expired(self):
+        """Manutenção periódica -> chamada pela tarefa de background."""
+
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                "DELETE FROM refresh_tokens WHERE expire_in < ? OR revoked=1",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
 
 # -> Dispositivos
 

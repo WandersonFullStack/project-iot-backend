@@ -36,7 +36,14 @@ def create_access_token(user_id: int, username: str, paper: str) -> str:
 
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-def decode_token() -> tuple[str, str]:
+def decode_token(token: str) -> dict:
+    """
+    Valida assinatura, algoritmo e expiração.
+    Lança jose.JWTError em qualquer falha -> nunca retorna payload invalido.
+    """
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+def generate_refresh_token() -> tuple[str, str]:
     """
     Gera um token opaco (não-JWT) de alta entropia.
 
