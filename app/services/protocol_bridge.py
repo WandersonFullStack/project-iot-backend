@@ -4,7 +4,7 @@ import json
 from app.config.broker_configs import log
 from app.controllers.database_controller import DatabaseController
 from app.controllers.callbacks_mqtt_controller import CallbacksMQTTContrller
-from backend.app.auth.device_auth import check_api_key
+from app.auth.device_auth import check_api_key
 
 class ProtocolBridge:
     """

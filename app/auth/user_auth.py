@@ -6,21 +6,21 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-ALGORITHM = os.getenv("JWT_ALGORITHM")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ReferenceError("JWT_SECRET_KEY enviroment variable is not set.")
+ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
-ACCESS_EXPIRE_MIN = int(os.getenv("ACCESS_EXPIRE_MIN"))
-REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS"))
-
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+ACCESS_EXPIRE_MIN = int(os.getenv("ACCESS_EXPIRE_MIN", 30))
+REFRESH_EXPIRE_DAYS = int(os.getenv("REFRESH_EXPIRE_DAYS", 7))
 
 def hash_password(password: str) -> str:
-    return pwd_ctx.hash(password)
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 def verify_password(password: str, hash_stored: str) -> bool:
-    return pwd_ctx.verify(password, hash_stored)
+    return bcrypt.checkpw(password.encode(), hash_stored.encode())
 
 def create_access_token(user_id: int, username: str, paper: str) -> str:
     """Gera um JWT assinado com HS256."""

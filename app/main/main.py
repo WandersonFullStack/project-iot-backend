@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 from datetime import datetime, timedelta
@@ -23,6 +24,10 @@ from app.services.tcp_gateway import TCPGateway
 from app.services.modbus_gateway import ModbusGateway, MapRegister
 from app.services.protocol_bridge import ProtocolBridge
 from app.routes.router_plcs import router as plcs_router
+from app.routes.router_auth import router as auth_router
+from app.routes.router_users import router as users_router
+from app.auth.user_auth import hash_password
+from app.auth.dependencies.depends import CurrentUser, OperatorUser
 
 # == INSTÂNCIAS GLOBAIS ===============================================
 db = DatabaseController("mqtt_data.db")
@@ -78,6 +83,22 @@ async def lifespan(app: FastAPI):
     await reload_map_modbus() # carrega o mapa salvo no banco ao iniciar
     await modbus_gw.start()
 
+    # -> Cria o primeiro admin se o banco não tiver nenhum usuário.
+    # Credenciais iniciais lidas de variáveis de ambiente.
+    # Troque imediatamente após o primeiro login.
+    if db.count_users() == 0:
+        db.create_user(
+            username=os.getenv("ADMIN_USER", "admin"),
+            email=os.getenv("ADMIN_EMAIL", "admin@email.com"),
+            name="Administrador",
+            password_hash=hash_password(os.getenv("ADMIN_PASSWORD", "admin@123")),
+            paper="admin",
+        )
+        log.warning(
+            "First admin created."
+            "Change the password in POST /api/v1/users/{id}/change-password"
+        )
+
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
         while True:
@@ -102,6 +123,8 @@ app = FastAPI(
 )
 app.include_router(devices_router)
 app.include_router(plcs_router)
+app.include_router(auth_router)
+app.include_router(users_router)
 
 # == DEPENDÊNCIAS -> injetadas via Depends()
 def get_db() -> DatabaseController:
@@ -138,7 +161,7 @@ Pag = Annotated[PagesParams, Depends(get_pages)]
     summary="MQTT connection status and database statistics",
     tags=["System"]
 )
-def get_status(db: DB, mqtt: MQTT):
+def get_status(db: DB, mqtt: MQTT, _: CurrentUser):
     """
     Retorna o estado atual do cliente MQTT e contagens do banco.
     Útil para health checks e monitoramento.
@@ -166,7 +189,8 @@ def list_messages(
         description="Filtro por tópico. Aceita '%' como wildcard: 'home/%'",
         examples={"exactly": {"value": "home/sensors/temperature"},
                   "wildcard": {"value": "home/%"}}
-    )
+    ),
+    _: CurrentUser = None
 ):
     """
     Retorna as mensagens MQTT armazenadas no banco.
@@ -180,7 +204,7 @@ def list_messages(
     summary="Search for a message by ID.",
     tags=["Messages"]
 )
-def search_message(message_id: int, db: DB):
+def search_message(message_id: int, db: DB, _: CurrentUser):
     row = db.search_message(message_id)
     if not row:
         raise HTTPException(
@@ -195,7 +219,7 @@ def search_message(message_id: int, db: DB):
     summary="Remove a message from the database.",
     tags=["Messages"]
 )
-def delete_message(message_id: int, db: DB):
+def delete_message(message_id: int, db: DB, _: OperatorUser):
     """
     Deleta a mensagem localmente - não afeta o broker.
     Retorna 204 No Content em caso de sucesso.
@@ -210,7 +234,7 @@ def delete_message(message_id: int, db: DB):
     summary="Publish a message MQTT",
     tags=["Publication"]
 )
-def publish_message(body: PublicationIn, db: DB, mqtt: MQTT):
+def publish_message(body: PublicationIn, db: DB, mqtt: MQTT, user: OperatorUser):
     """
     Enfileira uma publicação no broker MQTT com propriedes.
 
@@ -231,7 +255,7 @@ def publish_message(body: PublicationIn, db: DB, mqtt: MQTT):
         retain=body.retain,
         content_type=body.content_type,
         expiry_interval=body.expiry_interval,
-        user_properties=body.user_properties
+        user_properties=body.user_properties[("published_by", user["username"])],
     )
 
     return JSONResponse(
@@ -246,7 +270,7 @@ def publish_message(body: PublicationIn, db: DB, mqtt: MQTT):
     summary="List of messages posted by this client.",
     tags=["Publications"]
 )
-def list_publications(db: DB, pag: Pag):
+def list_publications(db: DB, pag: Pag, _: CurrentUser):
     """
     Exibe o histórico de publicações deste gateway, incluindo
     o campo `confirm_in` (null = aguardando PUBACK/PUBCOMP do broker).
@@ -261,7 +285,7 @@ def list_publications(db: DB, pag: Pag):
     summary="List the distinct topics already received.",
     tags=["Messages"]
 )
-def list_topics(db: DB):
+def list_topics(db: DB, _: CurrentUser):
     """
     Discovery: retorna todos os tópicos únicos que já chegaram ao gateway.
     """
@@ -269,10 +293,30 @@ def list_topics(db: DB):
 
 # == WEBSOCKET -> /ws ==================================================
 @app.websocket("/api/v1/ws")
-async def websocket_stream(websocket: WebSocket, mqtt: MQTT):
+async def websocket_stream(
+        websocket: WebSocket, 
+        mqtt: MQTT, 
+        db: DB, 
+        token: str = Query(..., description="JWT of access")
+):
     """
     Stream em tempo real de mensagens MQTT para clientes WebSocket.
     """
+    from app.auth.user_auth import decode_token
+    from jose import JWTError
+
+    try:
+        payload = decode_token(token)
+        user = db.search_users_per_id(int(payload["sub"]))
+
+        if not user or not user["active"]:
+            await websocket.close(code=4001)
+            return
+        
+    except JWTError:
+        await websocket.close(code=4001)
+        return
+    
     await websocket.accept()
 
     # Fila com limite de mensagens em buffer por cliente

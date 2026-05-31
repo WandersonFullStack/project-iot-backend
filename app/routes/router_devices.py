@@ -11,7 +11,8 @@ from app.models.schemas import (
     DeviceRegisterOut, RenewalKeyOut,
     MessageOut, PagesParams
 )
-from backend.app.auth.device_auth import generate_api_key, hash_api_key
+from app.auth.device_auth import generate_api_key, hash_api_key
+from app.auth.dependencies.depends import CurrentUser, OperatorUser, AdminUser
 
 router = APIRouter(prefix="/api/v1/devices", tags=["Devices"])
 
@@ -46,7 +47,7 @@ def _row_to_devices(row) -> dict:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new device and issue credentials.",
 )
-def register_device(body: DeviceIn, db: DB):
+def register_device(body: DeviceIn, db: DB, _: OperatorUser):
     """
     Cria um registro de dispositivos e retorna suas credenciais.
     """
@@ -76,7 +77,8 @@ def register_device(body: DeviceIn, db: DB):
 def list_devices(
     db: DB,
     pag: Pag,
-    active_only: bool = Query(default=True, description="Filter only active devices")
+    active_only: bool = Query(default=True, description="Filter only active devices"),
+    _: CurrentUser = None
 ):
     rows = db.list_device(active_only=active_only, limit=pag.limit, offset=pag.offset)
     return [_row_to_devices(r) for r in rows]
@@ -87,7 +89,7 @@ def list_devices(
     response_model=DeviceOut,
     summary="Search for a device by device_id."
 )
-def search_device(device_id: str, db: DB):
+def search_device(device_id: str, db: DB, _: CurrentUser):
     row = db.search_device(device_id)
     if not row:
         raise HTTPException(
@@ -102,7 +104,7 @@ def search_device(device_id: str, db: DB):
     response_model=DeviceOut,
     summary="Update name, description, topics or status active"
 )
-def update_device(device_id: str, body: DeviceUpdate, db: DB):
+def update_device(device_id: str, body: DeviceUpdate, db: DB, _: OperatorUser):
     """
     Atualização parcial - apenas os campos enviados no body são modificados.
     Para desativar um dispositivo sem excluí-lo, envie `{"active": false}`.
@@ -128,7 +130,7 @@ def update_device(device_id: str, body: DeviceUpdate, db: DB):
     response_model=RenewalKeyOut,
     summary="revokes the current api_key and issues a new one."
 )
-def renew_api_key(device_id: str, db: DB):
+def renew_api_key(device_id: str, db: DB, _: AdminUser):
     """
     Invalida imediatamente a api_key anterior.
     Qualquer dispositivo usandoa chave antiga passará a receber 401.
@@ -150,7 +152,7 @@ def renew_api_key(device_id: str, db: DB):
     response_model=list[MessageOut],
     summary="Messages received from a specific device"
 )
-def messages_device(device_id: str, db: DB, pag: Pag):
+def messages_device(device_id: str, db: DB, pag: Pag, _: CurrentUser):
     """
     Retorna o histórico de mensagens vinculadas a este device_id.
     """

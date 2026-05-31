@@ -12,7 +12,7 @@ from app.controllers.database_controller import DatabaseController
 from app.auth.dependencies.depends import get_current_user, CurrentUser
 from app.models.schema_users import LoginIn, TokenOut, AccessTokenOut, RefreshIn, UserOut
 
-router = APIRouter(prefix="auth", tags=["Authentication"])
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def get_db() -> DatabaseController:
     from app.main.main import db

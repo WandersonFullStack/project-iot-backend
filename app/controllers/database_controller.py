@@ -75,7 +75,7 @@ class DatabaseController:
                     status          TEXT    DEFAULT 'offline',
                     last_contact    TEXT,
                     created_in      TEXT    NOT NULL,
-                    active          INTEGER DEFAULT 1,             
+                    active          INTEGER DEFAULT 1             
                 );
                                
                 CREATE TABLE IF NOT EXISTS plcs (
@@ -139,8 +139,7 @@ class DatabaseController:
                 CREATE INDEX IF NOT EXISTS index_users_username ON users(username);
                 CREATE INDEX IF NOT EXISTS index_reftokens_token_hash ON refresh_tokens(token_hash);
                 CREATE INDEX IF NOT EXISTS index_reftokens_user_id ON refresh_tokens(user_id);
-                                              
-                CREATE INDEX IF NOT EXISTS index_device_user_id ON devices(user_id);
+
                 CREATE INDEX IF NOT EXISTS index_msg_device_id ON received_messages(device_id);
                                
                 CREATE INDEX IF NOT EXISTS index_plc_device_id ON plcs(device_id);
@@ -153,7 +152,7 @@ class DatabaseController:
 
 # ->    Usuários
 
-    def register_user(
+    def create_user(
             self,
             username: str,
             email: str,
@@ -191,7 +190,7 @@ class DatabaseController:
     ):
         with self._connection() as conn:
             return conn.execute(
-                "SELECT 8 FROM users WHERE username=?", (username,)
+                "SELECT * FROM users WHERE username=?", (username,)
             ).fetchone()
         
     def list_users(
@@ -268,7 +267,7 @@ class DatabaseController:
         with self._lock, self._connection() as conn:
             cur = conn.execute(
                 """INSERT INTO refresh_tokens (user_id, token_hash, created_in, expires_in)
-                    VALUES (?, ?, ?, ?)"""
+                    VALUES (?, ?, ?, ?)""",
                 (user_id, token_hash, datetime.now().isoformat(), expires),
             )
 

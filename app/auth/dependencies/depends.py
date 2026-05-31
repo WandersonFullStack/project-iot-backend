@@ -45,7 +45,7 @@ def get_current_user(
             detail="Malformed token."
         )
     
-    user = db.search_user_per_id(int(user_id))
+    user = db.search_users_per_id(int(user_id))
     if not user or not user["active"]:
         raise HTTPException(
             status_code=401,

@@ -14,6 +14,7 @@ from app.models.schemas import (
 )
 from app.config.broker_configs import log
 from app.config.modbus_configs import OFFSET_MODBUS as offset_mb
+from app.auth.dependencies.depends import CurrentUser, OperatorUser
 
 router = APIRouter(prefix="/api/v1/plcs", tags=["PLCs"])
 
@@ -67,7 +68,7 @@ def _row_for_register(row) -> dict:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new PLC on the gateway."
 )
-def create_plc(body: PLCIn, db: DB):
+def create_plc(body: PLCIn, db: DB, _: OperatorUser):
     """
     Vincula um CLP a um dispositivo já registrado via `device_id`.
     
@@ -106,16 +107,17 @@ def create_plc(body: PLCIn, db: DB):
 def list_plcs(
     db: DB,
     pag: Pag,
-    active_only: bool = Query(default=True)
+    active_only: bool = Query(default=True),
+    _: CurrentUser = None
 ):
     return [_row_for_plc(r) for r in db.list_plcs(active_only, pag.limit, pag.offset)]
 
 @router.get("/{plc_id}", response_model=PLCOut, summary="Search for a PLC by ID")
-def search_plc(plc_id: int, db: DB):
+def search_plc(plc_id: int, db: DB, _: CurrentUser):
     return _row_for_plc(_plc_or_404(db, plc_id))
 
 @router.patch("/{plc_id}", response_model=PLCOut, summary="Update PLC fields")
-def update_plc(plc_id: int, body: PLCUpdate, db: DB):
+def update_plc(plc_id: int, body: PLCUpdate, db: DB, _:OperatorUser):
     """
     Aceita qualquer subconjunto dos campos -> apenas os não-None são gravados.
     Para desativar sem excluir: `{"active": false}`.
@@ -134,7 +136,7 @@ def update_plc(plc_id: int, body: PLCUpdate, db: DB):
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Deactive PLC (soft delete)"
 )
-def remove_plc(plc_id: int, db: DB):
+def remove_plc(plc_id: int, db: DB, _: OperatorUser):
     """
     Não apaga o registro -> apenas seta àctive=0`.
     Os registradores permanecem no banco para histórico.
@@ -150,7 +152,7 @@ def remove_plc(plc_id: int, db: DB):
     response_model=TestConnectionOut,
     summary="Test the connection TCP/Modbus com o PLC"
 )
-def test_connection(plc_id: int, db: DB):
+def test_connection(plc_id: int, db: DB, _: OperatorUser):
     """
     Abre uma conexão Modbus TCP com o PLC, lê o registrador holding 0
     e fecha a conexão.
@@ -222,7 +224,7 @@ def test_connection(plc_id: int, db: DB):
     status_code=status.HTTP_201_CREATED,
     summary="Imports multiple registers at once."
 )
-def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: BackgroundTasks):
+def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: BackgroundTasks, _: OperatorUser):
     """
     Usa INSERT OR REPLACE — se o par (clp_id, tipo, endereco) já existir,
     os demais campos são atualizados. Ideal para importar um mapeamento
@@ -247,6 +249,7 @@ def export_registers_csv(
     plc_id: int,
     db: DB,
     active_only: bool = Query(default=True),
+    _: CurrentUser = None
 ):
     """
     Gera um CSV com todos os registradores do CLP.
@@ -286,6 +289,7 @@ def list_registers(
         description="Filter by type: holding | coil | input | discrete",
     ),
     active_only: bool = Query(default=True),
+    _: CurrentUser = None
 ):
     _plc_or_404(db, plc_id)
     rows = db.list_registers(plc_id, type=type, active_only=active_only,
@@ -298,7 +302,7 @@ def list_registers(
     status_code=status.HTTP_201_CREATED,
     summary="Adds a register to the PLC map."
 )
-def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: BackgroundTasks):
+def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: BackgroundTasks, _: OperatorUser):
     """
     Adiciona um único mapeamento. Para importação em masa, use /bulk.
 
@@ -345,7 +349,14 @@ def search_register(plc_id: int, register_id: int, db: DB):
     response_model=MapRegisterOut,
     summary="Updates fields in a register."
 )
-def update_register(plc_id: int, register_id: int, body: MapRegisterUpdate, db: DB, bg: BackgroundTasks):
+def update_register(
+    plc_id: int, 
+    register_id: int, 
+    body: MapRegisterUpdate, 
+    db: DB, 
+    bg: BackgroundTasks,
+    _: OperatorUser
+):
     """
     Apenas tópico, descrição, unidade, escala, offset, qos e ativo
     são atualizáveis. O tipo e o endereço são imutáveis após a criação
@@ -369,7 +380,7 @@ def update_register(plc_id: int, register_id: int, body: MapRegisterUpdate, db: 
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Permanently remove a register."
 )
-def delete_register(plc_id: int, register_id: int, db: DB, bg: BackgroundTasks):
+def delete_register(plc_id: int, register_id: int, db: DB, bg: BackgroundTasks, _: OperatorUser):
     """Deleção física -> registrador não têm histórico associado."""
 
     if not db.delete_register(register_id, plc_id):

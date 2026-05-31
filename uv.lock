@@ -41,6 +41,7 @@ name = "backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "bcrypt" },
     { name = "fastapi", extra = ["standard"] },
     { name = "paho-mqtt" },
     { name = "passlib", extra = ["bcrypt"] },
@@ -52,6 +53,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.1" },
     { name = "paho-mqtt", specifier = ">=2.1.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
