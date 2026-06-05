@@ -10,6 +10,7 @@ from fastapi import (
     Depends, FastAPI, HTTPException, Query,
     WebSocket, WebSocketDisconnect, status
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.controllers.database_controller import DatabaseController
@@ -121,6 +122,18 @@ app = FastAPI(
     description="Publica e recebe mensagens MQTT via REST e WebSocket.",
     lifespan=lifespan
 )
+
+origins = [
+    "http://localhost:5173",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
 app.include_router(devices_router)
 app.include_router(plcs_router)
 app.include_router(auth_router)
@@ -155,6 +168,10 @@ MQTT = Annotated[CallbacksMQTTContrller, Depends(get_mqtt)]
 Pag = Annotated[PagesParams, Depends(get_pages)]
 
 # == ROTAS -> /status
+@app.get("/")
+async def root():
+    return {"message": "MQTT Gateway API"}
+
 @app.get(
     "/api/v1/status",
     response_model=StatusOut,
