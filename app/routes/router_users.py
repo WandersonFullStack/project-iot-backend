@@ -31,7 +31,7 @@ Pag = Annotated[PagesParams, Depends(_page_params)]
     status_code=status.HTTP_201_CREATED,
     summary="create a new user (admin)"
 )
-def create_user(body: UserIn, db: DB, _: AdminUser):
+def create_user(body: UserIn, db: DB):
     """Apenas admins podem criar usuários"""
 
     try:

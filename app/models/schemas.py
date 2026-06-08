@@ -33,7 +33,7 @@ class PLCOut(BaseModel):
     unit_id: int
     timeout: float
     active: bool
-    create_in: datetime
+    created_in: datetime
     total_registers: int = 0
 
     model_config = {"from_attributes": True}
@@ -74,7 +74,7 @@ class MapRegisterOut(BaseModel):
     qos: int
     read_only: bool
     active: bool
-    create_in: datetime
+    created_in: datetime
 
     model_config = {"from_attributes": True}
 

@@ -1,6 +1,6 @@
-OFFSET_MODBUS: dict[str, int] = {
-    "discrete": 10001,
-    "coil": 1,
-    "input": 30001,
-    "holding": 40001,
+_OFFSET_MODBUS: dict[str, int] = {
+    "discrete": 10000,
+    "coil": 0,
+    "input": 30000,
+    "holding": 40000,
 }

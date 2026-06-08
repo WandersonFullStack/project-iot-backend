@@ -1,18 +1,23 @@
 from __future__ import annotations
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..user_auth import decode_token
+from app.config.database import AsyncSessionLocal
 from app.controllers.database_controller import DatabaseController
 
 _bearer = HTTPBearer(auto_error=True)
 
-def get_db() -> DatabaseController:
-    from app.main.main import db
-    return db
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
+
+DB = Annotated[AsyncSession, Depends(get_db)]
 
 def get_current_user(
         credentials: HTTPAuthorizationCredentials = Depends(_bearer),
