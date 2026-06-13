@@ -327,6 +327,7 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
         qos=body.qos,
         read_only=body.read_only
     )
+    
     if register_id == -1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -344,6 +345,7 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
 )
 async def search_register(plc_id: int, register_id: int, db: DB):
     row = await pc.search_register(db, plc_id, register_id)
+    
     if not row:
         raise HTTPException(
             status_code=404,
@@ -371,7 +373,9 @@ async def update_register(
     pois identificam unicamente o registrador no protocolo Modbus.
     Para trocar tipo/endereço, delete e recrie.
     """
-    if not pc.search_register(db, plc_id, register_id):
+    register = await pc.search_register(db, plc_id, register_id)
+
+    if not register:
         raise HTTPException(
             status_code=404,
             detail="Register not found."
@@ -385,7 +389,7 @@ async def update_register(
     await db.commit()
     await bg.add_task(pc.load_map_modbus)
 
-    return pc._attach_total_registers(pc.search_register(plc_id, register_id))
+    return pc._attach_total_registers(register)
 
 @router.delete(
     "/{plc_id}/registers/{register_id}",
@@ -395,7 +399,9 @@ async def update_register(
 async def delete_register(plc_id: int, register_id: int, db: DB, bg: BackgroundTasks, _: CurrentUser):
     """Deleção física -> registrador não têm histórico associado."""
 
-    if not pc.delete_register(db, register_id, plc_id):
+    register = await pc.delete_register(db, register_id, plc_id)
+
+    if not register:
         raise HTTPException(
             status_code=404,
             detail="Register not found."

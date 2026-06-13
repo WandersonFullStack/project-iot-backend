@@ -1,21 +1,23 @@
 from __future__ import annotations
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.database import AsyncSessionLocal
 from app.auth.user_auth import hash_password, verify_password
-from app.controllers.database_controller import DatabaseController
-from app.auth.dependencies.depends import AdminUser, CurrentUser, get_current_user
+from app.controllers import user_controller as uc
+from app.auth.dependencies.depends import CurrentUser
 from app.models.schema_users import UserIn, UserOut, UserUpdate, ReplacePasswordIn
 from app.models.schemas import PagesParams
 
 router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 
-def get_db() -> DatabaseController:
-    from app.main.main import db
-    return db
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
 
-DB = Annotated[DatabaseController, Depends(get_db)]
+DB = Annotated[AsyncSession, Depends(get_db)]
 
 def _page_params(
         limit: int = Query(20, ge=1, le=100),
@@ -29,88 +31,66 @@ Pag = Annotated[PagesParams, Depends(_page_params)]
     "",
     response_model=UserOut,
     status_code=status.HTTP_201_CREATED,
-    summary="create a new user (admin)"
+    summary="create a new user"
 )
-def create_user(body: UserIn, db: DB):
-    """Apenas admins podem criar usuários"""
-
+async def create_user(body: UserIn, db: DB):
+ 
     try:
-        user_id = db.create_user(
+        user_id = await uc.create_user(
+            db,
             username=body.username,
             email=body.email,
             name=body.name,
             password_hash=hash_password(body.password),
-            paper=body.paper,
         )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
         )
+    await db.commit()
     
-    return dict(db.search_users_per_id(user_id))
+    return user_id
 
-@router.get(
-    "",
-    response_model=list[UserOut],
-    summary="List users (admin)"
-)
-def list_users(db: DB, pag: Pag, _: AdminUser):
-    return [dict(r) for r in db.list_users(pag.limit, pag.offset)]
-
-@router.get(
-    "/{user_id}",
-    response_model=UserOut,
-    summary="Search user (admin)"
-)
-def search_user(user_id: int, db: DB, _: AdminUser):
-    row = db.search_users_per_id(user_id)
-
-    if not row:
-        raise HTTPException(
-            status_code=404, detail="User not found."
-        )
-    
-    return dict(row)
 
 @router.patch(
     "/{user_id}",
     response_model=UserOut,
-    summary="updated user (admin)"
+    summary="updated user"
 )
-def update_user(user_id: int, body: UserUpdate, db: DB, _: AdminUser):
-    if not db.search_users_per_id(user_id):
+async def update_user(user_id: int, body: UserUpdate, db: DB, _: CurrentUser):
+    user = await uc.search_user_by_username(db, user_id)
+
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found."
         )
-    db.update_user(
+    await uc.update_user(
+        db,
         user_id,
         **{k: v for k, v in body.model_dump().items() if v is not None}
     )
+    await db.commit()
 
-    return dict(db.search_users_per_id(user_id))
+    return user
 
 @router.post(
     "/{user_id}/change-password",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Change a user's password."
 )
-def change_password(
+async def change_password(
     user_id: int,
     body: ReplacePasswordIn,
     db: DB,
     logged_in_user: CurrentUser
 ):
     """
-    Regras de acesso:
-      - Admin pode trocar a senha de qualquer usuário sem confirmar a atual.
-      - Usuário comum só pode trocar a própria senha, confirmando a atual.
-
     Após troca de senha, todos os refresh tokens são revogados — forçando
     re-autenticação em todos os dispositivos.
     """
-    target = db.search_users_per_id(user_id)
+    target = await uc.search_user_by_id(db, user_id)
 
     if not target:
         raise HTTPException(
@@ -118,23 +98,7 @@ def change_password(
             detail="User not found."
         )
     
-    eh_admin = logged_in_user["paper"] == "admin"
-    eh_own = logged_in_user["id"] == user_id
-
-    if not eh_admin and not eh_own:
-        raise HTTPException(
-            status_code=403,
-            detail="No permission to modify this user."
-        )
-    
-    # Usuário comum deve confirmar a senha atual
-    if not eh_admin:
-        if not verify_password(body.current_password, target["password_hash"]):
-            raise HTTPException(
-                status_code=401,
-                detail="Current password is incorrect."
-            )
+    await uc.update_user(db, user_id, password_hash=hash_password(body.new_password))
+    await uc.revoked_all_refresh_tokens(db, user_id)
         
-    db.update_user(user_id, password_hash=hash_password(body.new_password))
-    db.revoke_all_refresh_tokens(user_id)
-    
+    await db.commit()

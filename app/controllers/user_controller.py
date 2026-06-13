@@ -56,7 +56,7 @@ async def list_users(
 
     return list(result.scalars().all())
 
-async def update_users(
+async def update_user(
         db: AsyncSession,
         user_id: int,
         **fields
