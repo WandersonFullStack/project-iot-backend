@@ -49,7 +49,7 @@ async def create_plc(
 
     return plc
 
-async def list_plc(
+async def list_plcs(
         db: AsyncSession,
         active_only: bool = True,
         limit: int = 50,
@@ -176,7 +176,7 @@ async def create_register_bulk(
     result = await db.execute(stmt)
     return result.rowcout
 
-async def list_register(
+async def list_registers(
         db: AsyncSession,
         plc_id: int,
         type: str | None = None,

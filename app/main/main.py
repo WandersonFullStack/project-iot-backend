@@ -28,7 +28,7 @@ from app.routes.router_plcs import router as plcs_router
 from app.routes.router_auth import router as auth_router
 from app.routes.router_users import router as users_router
 from app.auth.user_auth import hash_password
-from app.auth.dependencies.depends import CurrentUser, OperatorUser
+from app.auth.dependencies.depends import CurrentUser
 
 # == INSTÂNCIAS GLOBAIS ===============================================
 db = DatabaseController("mqtt_data.db")
