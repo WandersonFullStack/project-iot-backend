@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Annotated, Optional, AsyncGenerator
 from datetime import datetime, timedelta
 
 from fastapi import (
@@ -13,107 +13,140 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.controllers.database_controller import DatabaseController
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.controllers import (
+    message_controller as mc,
+    user_controller as uc,
+    device_controller as dc,
+    plc_controller as pc
+)
 from app.controllers.callbacks_mqtt_controller import CallbacksMQTTContrller
+
 from app.models.schemas import (
     MessageOut, PublicationIn, PublicationOut,
     StatusOut, PagesParams
 )
+from app.models.schema_orm import MapRegister as MapRegisterORM
+
+from app.config.database import AsyncSessionLocal, engine, Base
 from app.config.broker_configs import log, mqtt_broker_configs as config
-from app.routes.router_devices import router as devices_router
+
 from app.services.tcp_gateway import TCPGateway
 from app.services.modbus_gateway import ModbusGateway, MapRegister
 from app.services.protocol_bridge import ProtocolBridge
+
+from app.routes.router_devices import router as devices_router
 from app.routes.router_plcs import router as plcs_router
 from app.routes.router_auth import router as auth_router
 from app.routes.router_users import router as users_router
-from app.auth.user_auth import hash_password
+
+from app.auth.user_auth import hash_password, decode_token
 from app.auth.dependencies.depends import CurrentUser
 
 # == INSTÂNCIAS GLOBAIS ===============================================
-db = DatabaseController("mqtt_data.db")
-mqtt = CallbacksMQTTContrller(db)
-bridge = ProtocolBridge(db, mqtt)
+
+mqtt = CallbacksMQTTContrller()
+bridge = ProtocolBridge(mqtt)
 tcp_gw = TCPGateway(bridge)
 modbus_gw = ModbusGateway(bridge)
 
-async def _monitor_offline_devices(interval: int = 60, timeout_min: int = 5):
+# == MANAGED DEPENDENCIES =============================================
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Injeta uma nova sessão assincrona para cada requisição."""
+
+    async with AsyncSessionLocal() as session:
+        yield session
+
+DB = Annotated[AsyncSession, Depends(get_db)]
+
+# == TASKS OF BACKGROUND ==============================================
+
+async def _monitor_offline_devices(timeout_min: int = 5) -> None:
     """
     Tarefa asyncio que roda em background e marca como offline qualquer
     dispositivo que não publicou mensagem nos últimos minutos.
     """
-    limit = datetime.now() - timedelta(minutes=timeout_min)
-    with db._lock, db._connection() as conn:
-        conn.execute(
-            """UPDATE devices
-                SET status='offline'
-                WHERE status='online'
-                    AND (last_contact IS NULL OR last_contact < ?)
-                    AND active=1""",
-            (limit.isoformat(),),
-        )
+    async with AsyncSessionLocal() as db:
+        await dc.update_offline_devices(db, timeout=timeout_min)
+        await db.commit()
 
-async def reload_map_modbus():
+        log.info(f"Offline devices monitoring: checked at {datetime.now().isoformat()}")
+
+async def reload_map_modbus() -> None:
     """
     Carrega o mapa atual do banco e reconstrói o datastore do ModbusGateway.
     Chamada após criar/atualizar/deletar registradores via API.
     Executa em background para não bloquear a resposta HTTP.
     """
-    registers = db.load_map_modbus()
-    new_map = [
-        MapRegister(
-            address = r["address"],
-            topic = r["topic"],
-            unit = r["unit"] or "",
-            scale = r["scale"],
-            device_id = r["device_id"],
-        )
-        for r in registers
-    ]
-    modbus_gw.map = new_map
-    log.info("Map Modbus reloaded: %d registers active.", len(new_map))
+    async with AsyncSessionLocal() as db:
+        registers = pc.load_map_modbus(db)
+        new_map = [
+            MapRegister(
+                address = r["address"],
+                topic = r["topic"],
+                unit = r["unit"] or "",
+                scale = r["scale"],
+                device_id = r["device_id"],
+            )
+            for r in registers
+        ]
+        modbus_gw.map = new_map
+        log.info(f"Map Modbus reloaded: {len(new_map)} registers active.")
 
 # == LIFESPAN -> startup e shutdown gerenciados pelo FastAPI===========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    loop = asyncio.get_event_loop()
+    """Gerencia recursos globais: startup e shutdown do FastAPI."""
+
+    # -> STARTUP
+
+    log.info("Starting MQTT Gateway...")
+
+    # Cria tabelas
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    log.info("Database schema initialized")
 
     # Inicia todos os servidores concorrentemente
+    loop = asyncio.get_event_loop()
     mqtt.start(loop)
-    await tcp_gw.start()
-    await reload_map_modbus() # carrega o mapa salvo no banco ao iniciar
-    await modbus_gw.start()
 
-    # -> Cria o primeiro admin se o banco não tiver nenhum usuário.
-    # Credenciais iniciais lidas de variáveis de ambiente.
-    # Troque imediatamente após o primeiro login.
-    if db.count_users() == 0:
-        db.create_user(
-            username=os.getenv("ADMIN_USER", "admin"),
-            email=os.getenv("ADMIN_EMAIL", "admin@email.com"),
-            name="Administrador",
-            password_hash=hash_password(os.getenv("ADMIN_PASSWORD", "admin@123")),
-            paper="admin",
-        )
-        log.warning(
-            "First admin created."
-            "Change the password in POST /api/v1/users/{id}/change-password"
-        )
+    await tcp_gw.start()
+    await modbus_gw.start()
+    await reload_map_modbus() # carrega o mapa salvo no banco ao iniciar
+    
+    log.info("MQTT, TCP and Modbus Gateways started")
 
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
         while True:
-            await asyncio.sleep(60)
-            await _monitor_offline_devices(timeout_min=5)
+            try:
+                await asyncio.sleep(60)
+                await _monitor_offline_devices(timeout_min=5)
+            except Exception as e:
+                log.error(f"Error in offline devices monitor: {e}")
 
     task = asyncio.create_task(_loop_monitor())
 
     yield # aplicação rodando
-    
+
+    # -> SHUTDOWN
+    log.info("Shutting down MQTT Gateway...")
     task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
     await tcp_gw.stop()
     await modbus_gw.stop()
     mqtt.stop() # disconnect + loop_stop()
+    await engine.dispose()
+
+    log.info("MQTT Gateway stopped")
 
 # == APP ==============================================================
 app = FastAPI(
@@ -139,13 +172,7 @@ app.include_router(plcs_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 
-# == DEPENDÊNCIAS -> injetadas via Depends()
-def get_db() -> DatabaseController:
-    """
-    Injeta o DatabaseController nas rotas.
-    """
-    return db
-
+# == GLOBAL DEPENDENCIES ============================================
 def get_mqtt() -> CallbacksMQTTContrller:
     """
     Injeta o CallbacksMQTTController nas rotas que presisam publicar mensagens.
@@ -163,12 +190,12 @@ def get_pages(
     return PagesParams(limit=limit, offset=offset)
 
 # Aliases de tipo para injeção mais limpas nos handlers
-DB = Annotated[DatabaseController, Depends(get_db)]
+
 MQTT = Annotated[CallbacksMQTTContrller, Depends(get_mqtt)]
 Pag = Annotated[PagesParams, Depends(get_pages)]
 
 # == ROTAS -> /status
-@app.get("/")
+@app.get("/", tags=["System"])
 async def root():
     return {"message": "MQTT Gateway API"}
 
@@ -178,17 +205,20 @@ async def root():
     summary="MQTT connection status and database statistics",
     tags=["System"]
 )
-def get_status(db: DB, mqtt: MQTT, _: CurrentUser):
+async def get_status(db: DB, _: CurrentUser):
     """
     Retorna o estado atual do cliente MQTT e contagens do banco.
     Útil para health checks e monitoramento.
     """
+    msg_count = await mc.count_messages(db)
+    pub_count = await mc.count_publications(db)
+
     return StatusOut(
         mqtt_connected=mqtt.connected,
         broker=config["HOST"],
         client_id=config["CLIENT_ID"],
-        total_messages=db.tell_messages(),
-        total_publications=db.tell_publications()
+        total_messages=msg_count,
+        total_publications=pub_count
     )
 
 # == ROTAS -> /messages
@@ -198,22 +228,19 @@ def get_status(db: DB, mqtt: MQTT, _: CurrentUser):
     summary="lista mensagens recebidas com paginação e filtro de tópico",
     tags=["Messages"]
 )
-def list_messages(
+async def list_messages(
     db: DB,
     pag: Pag,
     topic: Optional[str] = Query(
         default=None,
-        description="Filtro por tópico. Aceita '%' como wildcard: 'home/%'",
-        examples={"exactly": {"value": "home/sensors/temperature"},
-                  "wildcard": {"value": "home/%"}}
+        description="Topic filter. Accepts '%' wildcard: 'home/%'",
     ),
     _: CurrentUser = None
 ):
     """
-    Retorna as mensagens MQTT armazenadas no banco.
+    Retorna as mensagens MQTT armazenadas no banco com paginação.
     """
-    rows = db.list_messages(topic=topic, limit=pag.limit, offset=pag.offset)
-    return [dict(r) for r in rows]
+    return await mc.list_messages(db, topic=topic, limit=pag.limit, offset=pag.offset) 
 
 @app.get(
     "/api/v1/messages/{message_id}",
@@ -221,14 +248,14 @@ def list_messages(
     summary="Search for a message by ID.",
     tags=["Messages"]
 )
-def search_message(message_id: int, db: DB, _: CurrentUser):
-    row = db.search_message(message_id)
-    if not row:
+async def search_message(message_id: int, db: DB, _: CurrentUser):
+    message = await mc.search_message(db, message_id)
+    if not message:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Message id={message_id} not found."
+            detail=f"Message not found."
         )
-    return dict(row)
+    return message
 
 @app.delete(
     "/api/v1/messages/{message_id}",
@@ -236,13 +263,16 @@ def search_message(message_id: int, db: DB, _: CurrentUser):
     summary="Remove a message from the database.",
     tags=["Messages"]
 )
-def delete_message(message_id: int, db: DB, _: OperatorUser):
+async def delete_message(message_id: int, db: DB, _: CurrentUser):
     """
     Deleta a mensagem localmente - não afeta o broker.
     Retorna 204 No Content em caso de sucesso.
     """
-    if not db.delete_message(message_id):
+    ok = await mc.delete(db, message_id)
+    if not ok:
         raise HTTPException(status_code=404, detail="Message not found.")
+    
+    await db.commit()
     
 # == ROTAS -> /plublish ================================================
 @app.post(
@@ -251,7 +281,7 @@ def delete_message(message_id: int, db: DB, _: OperatorUser):
     summary="Publish a message MQTT",
     tags=["Publication"]
 )
-def publish_message(body: PublicationIn, db: DB, mqtt: MQTT, user: OperatorUser):
+async def publish_message(body: PublicationIn, db: DB, user: CurrentUser):
     """
     Enfileira uma publicação no broker MQTT com propriedes.
 
@@ -272,13 +302,23 @@ def publish_message(body: PublicationIn, db: DB, mqtt: MQTT, user: OperatorUser)
         retain=body.retain,
         content_type=body.content_type,
         expiry_interval=body.expiry_interval,
-        user_properties=body.user_properties[("published_by", user["username"])],
+        user_properties={**{("published_by", user.get("username", "system"))}},
     )
+    await mc.register_publication(
+        db, 
+        topic=body.topic,
+        payload=body.payload,
+        qos=body.qos,
+        mid=mid
+    )
+    await db.commit()
 
-    return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
-        content={"status": "lined up", "mid": mid, "rc": rc, "topic": body.topic}
-    )
+    return {
+        "status": "quered",
+        "mid": mid,
+        "rc": rc,
+        "topic": body.topic
+    }
 
 # == ROTAS -> /publications =============================================
 @app.get(
@@ -287,13 +327,12 @@ def publish_message(body: PublicationIn, db: DB, mqtt: MQTT, user: OperatorUser)
     summary="List of messages posted by this client.",
     tags=["Publications"]
 )
-def list_publications(db: DB, pag: Pag, _: CurrentUser):
+async def list_publications(db: DB, pag: Pag, _: CurrentUser):
     """
     Exibe o histórico de publicações deste gateway, incluindo
     o campo `confirm_in` (null = aguardando PUBACK/PUBCOMP do broker).
     """
-    rows = db.list_publications(limit=pag.limit, offset=pag.offset)
-    return [dict(r) for r in rows]
+    return await mc.list_publications(db, limit=pag.limit, offset=pag.offset)
 
 # == ROTAS -> /topics
 @app.get(
@@ -302,40 +341,43 @@ def list_publications(db: DB, pag: Pag, _: CurrentUser):
     summary="List the distinct topics already received.",
     tags=["Messages"]
 )
-def list_topics(db: DB, _: CurrentUser):
+async def list_topics(db: DB, _: CurrentUser):
     """
     Discovery: retorna todos os tópicos únicos que já chegaram ao gateway.
     """
-    return db.distinct_topics()
+    return await mc.distinct_topics(db)
 
 # == WEBSOCKET -> /ws ==================================================
 @app.websocket("/api/v1/ws")
 async def websocket_stream(
         websocket: WebSocket, 
-        mqtt: MQTT, 
-        db: DB, 
         token: str = Query(..., description="JWT of access")
 ):
     """
     Stream em tempo real de mensagens MQTT para clientes WebSocket.
     """
-    from app.auth.user_auth import decode_token
     from jose import JWTError
 
     try:
         payload = decode_token(token)
-        user = db.search_users_per_id(int(payload["sub"]))
+        user_id = int(payload.get("sub", 0))
 
-        if not user or not user["active"]:
-            await websocket.close(code=4001)
-            return
-        
-    except JWTError:
-        await websocket.close(code=4001)
+    except (JWTError, ValueError):
+        await websocket.close(code=4001, reason="Invalid token")
         return
-    
-    await websocket.accept()
+        
+    async with AsyncSessionLocal() as db:
+        user = await uc.search_user_by_id(db, user_id)
 
+        if not user or not user.active:
+            await websocket.close(
+                code=4001,
+                reason="User not found or inactive"
+            )
+            return
+
+    await websocket.accept()
+    
     # Fila com limite de mensagens em buffer por cliente
     q: asyncio.Queue[dict] = asyncio.Queue(maxsize=50)
     mqtt.register_ws_queue(q)
@@ -350,7 +392,9 @@ async def websocket_stream(
             data = await q.get()
             await websocket.send_text(json.dumps(data, default=str))
     except WebSocketDisconnect:
-        pass
+        log.info(f"WebSocket client disconnected: user_id={user_id}")
+    except Exception as e:
+        log.info(f"WebSocket error: {e}")
     finally:
         # Garantia de limpeza mesmo em caso de exceção
         mqtt.remove_ws_queue(q)
