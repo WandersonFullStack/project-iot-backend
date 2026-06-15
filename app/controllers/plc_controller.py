@@ -275,5 +275,5 @@ async def load_map_modbus(
         .order_by(PLC.id, MapRegister.type, MapRegister.address)
     )
 
-    return [row._asdict() for row in result.all]
+    return [row._asdict() for row in result.all()]
 

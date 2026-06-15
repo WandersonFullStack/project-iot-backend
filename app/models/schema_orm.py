@@ -29,7 +29,7 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc)
     )
 
-    token: Mapped[list["RefreshToken"]] = relationship(
+    tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan"
     )
@@ -74,7 +74,7 @@ class Device(Base):
         back_populates="device",
         cascade="all, delete-orphan"
     )
-    massages: Mapped[list[ReceivedMessage]] = relationship(back_populates="device")
+    messages: Mapped[list[ReceivedMessage]] = relationship(back_populates="device")
     publications: Mapped[list[Publication]] = relationship(back_populates="device")
 
 class PLC(Base):
@@ -113,7 +113,7 @@ class MapRegister(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plc_id: Mapped[int] = mapped_column(Integer, ForeignKey("plc.id"))
+    plc_id: Mapped[int] = mapped_column(Integer, ForeignKey("plcs.id"))
     type: Mapped[str] = mapped_column(String(20))
     address: Mapped[int] = mapped_column(Integer)
     topic: Mapped[str] = mapped_column(String)

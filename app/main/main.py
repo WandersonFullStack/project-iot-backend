@@ -81,7 +81,7 @@ async def reload_map_modbus() -> None:
     Executa em background para não bloquear a resposta HTTP.
     """
     async with AsyncSessionLocal() as db:
-        registers = pc.load_map_modbus(db)
+        registers = await pc.load_map_modbus(db)
         new_map = [
             MapRegister(
                 address = r["address"],

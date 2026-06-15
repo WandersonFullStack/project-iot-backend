@@ -1,7 +1,11 @@
 import hashlib
 import secrets
-from fastapi import Header, HTTPException, status
-from app.controllers.database_controller import DatabaseController
+from typing import Annotated, AsyncGenerator
+
+from fastapi import Header, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config.database import AsyncSessionLocal
 
 def generate_api_key() -> str:
     """Gera uma chave aleatória criptograficamente segura de 32 bytes(256 bits)."""
@@ -15,10 +19,16 @@ def check_api_key(api_key_plain: str, api_key_hash: str) -> bool:
     """Compara o hash da chave fornecida com o hash armazenado."""
     return hash_api_key(api_key_plain) == api_key_hash
 
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        yield session
+
+DB = Annotated[AsyncSession, Depends(get_db)]
+
 async def authenticate_device(
         x_device_id: str = Header(..., description="device_id do dispositivo"),
         x_api_key: str = Header(..., description="api_key emitida no registro"),
-        db: DatabaseController = None
+        db: DB = None
 ) -> dict:
     """Dependência FastAPI para rotas que exigem autenticação de dispositivos."""
     device = db.search_device(x_device_id)

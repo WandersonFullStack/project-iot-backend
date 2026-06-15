@@ -36,7 +36,7 @@ Pag = Annotated[PagesParams, Depends(_page_params)]
 async def create_user(body: UserIn, db: DB):
  
     try:
-        user_id = await uc.create_user(
+        user = await uc.create_user(
             db,
             username=body.username,
             email=body.email,
@@ -49,9 +49,8 @@ async def create_user(body: UserIn, db: DB):
             detail=str(e)
         )
     await db.commit()
-    
-    return user_id
 
+    return user
 
 @router.patch(
     "/{user_id}",

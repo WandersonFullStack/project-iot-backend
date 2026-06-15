@@ -36,7 +36,7 @@ async def login(body: LoginIn, db: DB):
     """
     user = await uc.search_user_by_username(db, body.username)
 
-    password_ok = await verify_password(db, body.password, user["password_hash"]) if user else False
+    password_ok = verify_password(body.password, user.password_hash) if user else False
 
     if not user or not password_ok:
         raise HTTPException(
@@ -51,11 +51,11 @@ async def login(body: LoginIn, db: DB):
             detail="Conta desativada."
         )
     
-    access = await create_access_token(db, user.id, user.username)
-    rt_plain, rt_hash = await generate_refresh_token()
+    access = create_access_token(db, user.id, user.username)
+    rt_plain, rt_hash = generate_refresh_token()
 
     await uc.create_refresh_token(db, user.id, rt_hash)
-    await uc.update_login_only(db, user.id)
+    # await uc.update_login_only(db, user.id)
 
     await db.commit()
 
