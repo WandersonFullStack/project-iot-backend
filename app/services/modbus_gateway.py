@@ -12,8 +12,10 @@ from pymodbus.datastore import (
 from pymodbus.server import StartAsyncTcpServer
 from pymodbus.pdu.device import ModbusDeviceIdentification
 
+from app.config.database import AsyncSessionLocal
 from app.services.protocol_bridge import ProtocolBridge
 from app.config.broker_configs import log
+from app.controllers import plc_controller as pc
 
 # == MAPEAMENTO DE REGISTRADORES -> TÓPICOS MQTT ==================
 @dataclass
@@ -130,6 +132,38 @@ class ModbusGateway:
         ident.MajorMinorRevision = "1.0"
         
         return ident
+    
+    async def read_and_forward(
+            self,
+            plc_id: int,
+            register_id: int,
+            value: int
+    ):
+        """
+        Lê um registrador Modbus e publica no MQTT via bridge.
+        """
+        async with AsyncSessionLocal() as db:
+            # Buscar PLC e registrador
+            register = await pc.search_register(db, plc_id, register_id)
+            plc = await pc.search_plc(db, plc_id)
+
+            if not register or not plc:
+                return
+            
+            # Aplicar scale/offset
+            real_value = value * register.scale + register.offset
+
+            # Publicar via bridge
+            msg_id = await self.bridge.to_forward(
+                db,
+                device_id=plc.device_id,
+                topic=register.topic,
+                payload={"value": real_value, "unit": register.unit},
+                qos=register.qos
+            )
+            await db.commit()
+
+            return msg_id
     
     async def start(self):
         """

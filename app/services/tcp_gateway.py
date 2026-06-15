@@ -3,6 +3,8 @@ import asyncio
 import json
 import time
 
+from app.config.database import AsyncSessionLocal
+
 from .protocol_bridge import ProtocolBridge
 from app.config.broker_configs import log
 from app.config.tcp_configs import tcp_limits_config as config
@@ -197,6 +199,32 @@ class TCPGateway:
         self.host = host
         self.port = port
         self._server: asyncio.Server | None = None
+
+    async def handle_connection(
+            self,
+            device_id: str,
+            api_key: str,
+            data: dict
+    ):
+        """
+        Quando um cliente TCP conecta, autentica e envia dados.
+        """
+        async with AsyncSessionLocal() as db:
+            device = await self.bridge.authenticate(db, device_id, api_key)
+
+            if not device:
+                log.info(f"Auth failed for {device_id}")
+
+                return
+            
+            msg_id = await self.bridge.to_forward(
+                db,
+                device_id=device_id,
+                topic=f"tcp/{device_id}/data",
+                payload=data,
+                qos=1
+            )
+            log.info(f"TCP message forwarded: msg_id={msg_id}")
 
     async def _handle_client(
             self,

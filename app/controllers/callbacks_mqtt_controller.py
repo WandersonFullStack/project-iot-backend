@@ -7,17 +7,20 @@ import paho.mqtt.client as mqtt
 from paho.mqtt.properties import Properties
 from paho.mqtt.packettypes import PacketTypes
 
-from .database_controller import DatabaseController
+from app.config.database import AsyncSessionLocal
 from app.config.broker_configs import mqtt_broker_configs as config, log
+from app.controllers import (
+    device_controller as dc,
+    message_controller as mc
+)
 
 class CallbacksMQTTContrller:
     """
     Encapsula o cliente pahi e todos os callbacks do MQTT v5.
-    Recebe uma instância de DatabaseController para persistência.
+    Usa controllers e AsyncSession para persistência.
     """
 
-    def __init__(self, db: DatabaseController):
-        self.db = db
+    def __init__(self):
         self._connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -59,11 +62,24 @@ class CallbacksMQTTContrller:
             except asyncio.QueueFull:
                 log.warning("WebSocket queue cheia - mensagem descartada")
 
+    # -> Helper para executar assync desde callbacks de thread
+
+    def _run_async_task(self, coro):
+        """
+        Executa uma coroutine no event loop asyncio da aplicação.
+        Chamado desde os callbacks do Paho que rodam em thread separada.
+        """
+        if not self._loop:
+            log.warning("Event loop not available - skipping async task")
+            return
+        
+        asyncio.run_coroutine_threadsafe(coro, self._loop)
+
     # -> Callbacks MQTT
 
     def _on_connect(self, client, userdata, connect_flags, reason_code, properties):
         """
-        Camado após o broker processar o pacote CONNECT e responder com CONNACK.
+        Chamado após o broker processar o pacote CONNECT e responder com CONNACK.
         """
 
         if reason_code.value == 0:
@@ -77,7 +93,11 @@ class CallbacksMQTTContrller:
             # Montar propriedade de assinatura
             self._subscribe_topics()
         else:
-            log.error("MQTT Falha na conexão: %s (%d)", reason_code.getName(), reason_code.value)
+            log.error(
+                "MQTT Falha na conexão: %s (%d)", 
+                reason_code.getName(), 
+                reason_code.value
+            )
 
     def _subscribe_topics(self):
         """
@@ -94,9 +114,17 @@ class CallbacksMQTTContrller:
         Chamado quando a conexão com o broker é encerrada.
         """
         self._connected = False
-        origin = "broker" if disconnect_flags.is_disconnect_packet_from_server else "client"
-        log.warning("MQTT Desconectado | origem=%s motivo='%s'", origin, 
-                    reason_code.getName() if reason_code else "-")
+        origin = (
+            "broker" 
+            if disconnect_flags.is_disconnect_packet_from_server 
+            else "client"
+        )
+
+        log.warning(
+            "MQTT Desconectado | origem=%s motivo='%s'", 
+            origin, 
+            reason_code.getName() if reason_code else "-"
+        )
 
     def _on_subscribe(self, client, userdata, mid, reason_codes, properties):
         """
@@ -111,9 +139,9 @@ class CallbacksMQTTContrller:
 
     def _on_message(self, client, userdata, message):
         """ 
-        Identificação de dispositivo via UserProperty.
+        Callback chamado quando uma mensagem chega.
+        Extrai device_id, persiste e faz broadcast para WebSockets.
         """
-
         topic = message.topic
         payload = message.payload.decode("utf-8", errors="replace")
         props = message.properties
@@ -129,36 +157,73 @@ class CallbacksMQTTContrller:
                 device_id = value
                 break
 
-        # Atualizar status do dispositivo se identificado
-        if device_id:
-            device = self.db.search_device(device_id)
-            if device and device["active"]:
-                self.db.update_status(device_id, "online")
-                log.info("MSG of device '%s' | topic='%s'", device_id,topic)
-            else:
-                log.warning("MSG with unknown/inactive device_id: '%s'", device_id)
-                device_id = None    # não vincula ao banco se não existe
-
-        # Persistir no banco
-        row_id = self.db.insert_messages(
-            device_id=device_id,
-            topic=topic,
-            payload=payload,
-            qos=message.qos,
-            retain=message.retain,
-            content_type=content_type,
-            user_props=user_props_str,
+        # Enfileirar operação assincrona de persistência
+        self._run_async_task(
+            self._save_message_async(
+                device_id=device_id,
+                topic=topic,
+                payload=payload,
+                qos=message.qos,
+                retain=message.retain,
+                content_type=content_type,
+                user_props=user_props_str,
+            )
         )
 
-        # Broadcast para WebSockets
-        self._broadcast_for_ws({
-            "id": row_id,
-            "device_id": device_id,
-            "topic": topic,
-            "payload": payload,
-            "qos": message.qos,
-            "retain": message.retain,
-        })
+        # Broadcast imediato para WebSockets -> não bloqueia
+        self._broadcast_for_ws(
+            {
+                "device_id": device_id,
+                "topic": topic,
+                "payload": payload,
+                "qos": message.qos,
+                "retain": message.retain,
+            }
+        )
+
+    async def _save_message_async(
+            self,
+            device_id: str | None,
+            topic: str,
+            payload: str,
+            qos: int,
+            retain: bool,
+            content_type: str | None = None,
+            user_props: str | None = None
+    ) -> None:
+        """
+        Persiste a mensagem no banco de dados.
+        Executada no event loop asyncio da aplicação.
+        """
+        async with AsyncSessionLocal() as db:
+            try:
+                # Atualizar status do dispositivo se identificado
+                if device_id:
+                    device = await dc.search_device(db, device_id)
+                    if device and device.active:
+                        await dc.update_status(db, device_id, "online")
+                        log.info("MSG of device '%s' | topic='%s'", device_id, topic)
+                    else:
+                        log.warning(
+                            "MSG with unknown/inactive device_id: '%s'", device_id
+                        )
+                        device_id = None
+
+                # Inserir mensagem
+                await mc.insert_message(
+                    db,
+                    device_id=device_id,
+                    topic=topic,
+                    payload=payload,
+                    qos=qos,
+                    retain=retain,
+                    content_type=content_type,
+                    user_props=user_props
+                )
+                await db.commit()
+            except Exception as e:
+                log.error(f"Error saving message: {e}")
+                await db.rollback()
 
     def _on_publish(self, client, userdata, mid, reason_code, properties):
         """
@@ -173,13 +238,24 @@ class CallbacksMQTTContrller:
         name = reason_code.getName() if reason_code else "-"
         if not reason_code or reason_code.value in (0x00, 0x10):
             log.info("PUBACK | mid=%d reason='%s'", mid, name)
-            self.db.confirm_publication(mid)
+            self._run_async_task(self._confirm_publication_async(mid))
         else:
             log.error("Puvlicação falhou | mid=%d reason='%s'", mid, name)
 
+    async def _confirm_publication_async(self, mid: int) -> None:
+        """Confirma a publicação no banco de dados."""
+
+        async with AsyncSessionLocal() as db:
+            try:
+                await mc.confirm_publication(db, mid)
+                await db.commit()
+            except Exception as e:
+                log.error(f"Error confirming publication: {e}")
+                await db.rollback()
+
 
     # PUBLICAÇÃO COM PROPRIEDADES
-    def _publish(
+    async def publish(
             self,
             topic: str,
             payload: str,
@@ -192,7 +268,6 @@ class CallbacksMQTTContrller:
         """
         Publica uma mensagem com propriedades MQTT.
         """
-
         props = Properties(PacketTypes.PUBLISH)
         props.ContentType = content_type
         props.PayloadFormatIndicator = 1 #UTF-8
@@ -202,13 +277,49 @@ class CallbacksMQTTContrller:
         if expiry_interval:
             props.MessageExpiryInterval = expiry_interval
 
-        info = self.client.publish(topic, payload, qos=qos, retain=retain, properties=props)
+        info = self.client.publish(
+            topic, 
+            payload, 
+            qos=qos, 
+            retain=retain, 
+            properties=props
+        )
         # info.rc: código de retorno imediato (não é a confirmação do broker)
-        # info.mid: message-id para rastrear no on_plublish
-        self.db.register_publication(topic, payload, qos, info.mid)
+        # info.mid: message_id para rastrear no on_plublish
         log.info("PUBLISH enfileirado | tópico='%s' mid=%d", topic, info.mid)
 
+        # Registrar no banco de forma assíncrona
+        self._run_async_task(
+            self._register_publication_async(
+                topic=topic,
+                payload=payload,
+                qos=qos,
+                mid=info.mid
+            )
+        )
+
         return info.rc, info.mid
+    
+    async def _register_publication_async(
+            self,
+            topic: str,
+            payload: str,
+            qos: int,
+            mid: int
+    ) -> None:
+        async with AsyncSessionLocal() as db:
+            try:
+                await mc.register_publication(
+                    db,
+                    topic=topic,
+                    payload=payload,
+                    qos=qos,
+                    mid=mid
+                )
+                await db.commit()
+            except Exception as e:
+                log.error(f"Error registering publication: {e}")
+                await db.rollback()
     
     # CONEXÃO COM PROPRIEDADES
     def start(self, loop: asyncio.AbstractEventLoop):
