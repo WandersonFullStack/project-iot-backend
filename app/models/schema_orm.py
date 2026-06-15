@@ -35,7 +35,7 @@ class User(Base):
     )
 
 class RefreshToken(Base):
-    __tablename__ = "refresh_token"
+    __tablename__ = "refresh_tokens"
     __table_args__ = (
         Index("index_reftokens_token_hash", "token_hash"),
         Index("index_reftokens_user_id", "user_id")
@@ -89,7 +89,7 @@ class PLC(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     ip: Mapped[str] = mapped_column(String(45))
     port_modbus: Mapped[int] = mapped_column(Integer, default=502)
-    port_tpc: Mapped[int] = mapped_column(Integer, default=9000)
+    port_tcp: Mapped[int] = mapped_column(Integer, default=9000)
     protocol: Mapped[str] = mapped_column(String(20), default='modbus')
     unit_id: Mapped[int] = mapped_column(Integer, default=255)
     timeout: Mapped[float] = mapped_column(Float, default=5.0)
@@ -141,7 +141,7 @@ class ReceivedMessage(Base):
     __tablename__ = "received_messages"
     __table_args__ = (
         Index("index_msg_device_id", "device_id"),
-        Index("index_msg_toic", "topic"),
+        Index("index_msg_topic", "topic"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

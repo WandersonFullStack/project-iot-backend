@@ -57,8 +57,8 @@ async def create_user(body: UserIn, db: DB):
     response_model=UserOut,
     summary="updated user"
 )
-async def update_user(user_id: int, body: UserUpdate, db: DB, _: CurrentUser):
-    user = await uc.search_user_by_username(db, user_id)
+async def update_user(user_id: int, body: UserUpdate, db: DB, user: CurrentUser):
+    corrent_user = await uc.search_user_by_id(db, user_id)
 
     if not user:
         raise HTTPException(
@@ -72,7 +72,9 @@ async def update_user(user_id: int, body: UserUpdate, db: DB, _: CurrentUser):
     )
     await db.commit()
 
-    return user
+    corrent_user = await uc.search_user_by_id(db, user_id)
+
+    return corrent_user
 
 @router.post(
     "/{user_id}/change-password",
@@ -97,7 +99,59 @@ async def change_password(
             detail="User not found."
         )
     
-    await uc.update_user(db, user_id, password_hash=hash_password(body.new_password))
+    await uc.update_user(
+        db, 
+        user_id, 
+        password_hash=hash_password(
+            body.new_password
+        )
+    )
+
     await uc.revoked_all_refresh_tokens(db, user_id)
         
+    await db.commit()
+
+
+# -> ME = User Profile
+
+@router.get(
+    "/me/profile",
+    response_model=UserOut,
+    summary="Get current user profole"
+)
+async def get_profile(
+    db: DB,
+    user: CurrentUser
+):
+    return user
+
+@router.post(
+    "/me/change-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Change own password"
+)
+async def chande_own_password(
+    body: ReplacePasswordIn,
+    db: DB,
+    user: CurrentUser
+):
+    """Usuário muda sua própria senha, confirmando a atual."""
+
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incrrect."
+        )
+    
+    await uc.update_user(
+        db,
+        user.id,
+        password_hash=hash_password(
+            body.new_password
+        )
+    )
+    await uc.revoked_all_refresh_tokens(
+        db,
+        user.id
+    )
     await db.commit()

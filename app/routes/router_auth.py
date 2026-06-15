@@ -48,10 +48,10 @@ async def login(body: LoginIn, db: DB):
     if not user.active:
         raise HTTPException(
             status_code=403,
-            detail="Conta desativada."
+            detail="Account deactivated."
         )
     
-    access = create_access_token(db, user.id, user.username)
+    access = create_access_token(user.id, user.username)
     rt_plain, rt_hash = generate_refresh_token()
 
     await uc.create_refresh_token(db, user.id, rt_hash)
@@ -72,7 +72,7 @@ async def refresh(body: RefreshIn, db: DB):
     O refresh_token NÃO é rotacionado — o mesmo vale até expirar ou ser revogado.
     Para rotação automática (mais seguro), revogue e gere um novo a cada uso.
     """
-    token_hash = await hash_refresh_token(db, body.refresh_token)
+    token_hash = hash_refresh_token(body.refresh_token)
     register = await uc.search_refresh_token(db, token_hash)
 
     if not register:
@@ -81,7 +81,7 @@ async def refresh(body: RefreshIn, db: DB):
             detail="Refresh token is invalid or revoked."
         )
     
-    if datetime.fromisoformat(register["expires_in"]) < datetime.now(timezone.utc):
+    if register.expires_in < datetime.now(timezone.utc):
         raise HTTPException(
             status_code=401,
             detail="Refresh token expired. Please log in again."
@@ -94,9 +94,7 @@ async def refresh(body: RefreshIn, db: DB):
             detail="User inactive."
         )
     
-    new_access = await create_access_token(db, user.id, user.username)
-
-    await db.commit()
+    new_access = create_access_token(user.id, user.username)
 
     return AccessTokenOut(
         access_token=new_access
@@ -113,7 +111,7 @@ async def logout(body: RefreshIn, db: DB, user: CurrentUser):
     O access_token permanece válido até expirar naturalmente (por isso o prazo curto).
     Para invalidar todos os dispositivos, chame DELETE /auth/sessoes.
     """
-    token_hash = await hash_refresh_token(db, body.refresh_token)
+    token_hash = hash_refresh_token(body.refresh_token)
     await uc.revoke_refresh_token(db, token_hash, user.id)
 
     await db.commit()
@@ -124,16 +122,12 @@ async def logout(body: RefreshIn, db: DB, user: CurrentUser):
     summary="Revokes all refresh tokens for the user (full logout)."
 )
 async def full_logout(db: DB, user: CurrentUser):
-    """Logout de todos os dispositivos — útil após suspeita de comprometimento."""
+    """Invalida TODOS os refresh tokens do usuário.
+    Força re-autenticação em todos os dispositivos.
+    Útil após troca de senha ou suspeita de comprometimento.
+    """
     await uc.revoked_all_refresh_tokens(db, user.id)
 
     await db.commit()
 
-@router.get(
-    "/me",
-    response_model=UserOut,
-    summary="Returns the authenticated user."
-)
-async def me(user: CurrentUser):
-    
-    return user
+

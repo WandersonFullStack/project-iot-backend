@@ -3,7 +3,6 @@ import hashlib
 import os
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 import bcrypt
@@ -22,15 +21,12 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hash_stored: str) -> bool:
     return bcrypt.checkpw(password.encode(), hash_stored.encode())
 
-def create_access_token(user_id: int, username: str, paper: str) -> str:
+def create_access_token(user_id: int, username: str) -> str:
     """Gera um JWT assinado com HS256."""
 
-    now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "username": username,
-        "paper": paper,
-        "exp": now + timedelta(minutes=ACCESS_EXPIRE_MIN),
         "jti": str(uuid.uuid4)
     }
 

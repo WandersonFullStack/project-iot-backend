@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..user_auth import decode_token
 from app.config.database import AsyncSessionLocal
+from app.controllers import user_controller as uc
+from app.models.schema_orm import User
 
 _bearer = HTTPBearer(auto_error=True)
 
@@ -18,10 +20,10 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 
-def get_current_user(
+async def get_current_user(
         credentials: HTTPAuthorizationCredentials = Depends(_bearer),
         db: AsyncSession = Depends(get_db)
-) -> dict:
+) -> User:
     """
     Dependência principal de autenticação.
 
@@ -43,44 +45,24 @@ def get_current_user(
         )
     
     user_id = payload.get("sub")
-    if not user_id:
+    try:
+        user_id = int(user_id)
+    except (ValueError, TypeError):
         raise HTTPException(
             status_code=401,
             detail="Malformed token."
         )
     
-    user = db.search_users_per_id(int(user_id))
-    if not user or not user["active"]:
+    user = await uc.search_user_by_id(db, user_id)
+    if not user or not user.active:
         raise HTTPException(
             status_code=401,
             detail="User not found or anactive."
         )
     
-    return dict(user)
+    return user
 
-# def require_operator(user: dict = Depends(get_current_user)) -> dict:
-#     """Permite admin e operador. Bloqueia leitura."""
 
-#     if user["paper"] not in ("admin", "operator"):
-#         raise HTTPException(
-#             status_code=status.HTTP_403_FORBIDDEN,
-#             detail="Insufficient permission. Requires 'operator' or 'admin' role."
-#         )
-    
-#     return user
-
-# def require_admin(user: dict = Depends(get_current_user)) -> dict:
-#     """Permite apenas admin"""
-
-#     if user["paper"] != "admin":
-#         raise HTTPException(
-#             status_code=status.HTTP_403_FORBIDDEN,
-#             detail="Insufficient permission. Requires 'admin' role."
-#         )
-    
-#     return user
 
 # Aliases tipados -> assinatura das rotas
 CurrentUser = Annotated[dict, Depends(get_current_user)]
-# OperatorUser = Annotated[dict, Depends(require_operator)]
-# AdminUser = Annotated[dict, Depends(require_admin)]
