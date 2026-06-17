@@ -234,7 +234,6 @@ class CallbacksMQTTContrller:
             QoS 1 -> ao receber PUBACK do broker
             QoS 2 -> ao receber PUBCOMP
         """
-
         name = reason_code.getName() if reason_code else "-"
         if not reason_code or reason_code.value in (0x00, 0x10):
             log.info("PUBACK | mid=%d reason='%s'", mid, name)
@@ -242,6 +241,7 @@ class CallbacksMQTTContrller:
         else:
             log.error("Puvlicação falhou | mid=%d reason='%s'", mid, name)
 
+    
     async def _confirm_publication_async(self, mid: int) -> None:
         """Confirma a publicação no banco de dados."""
 

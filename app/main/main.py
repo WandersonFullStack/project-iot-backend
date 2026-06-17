@@ -240,7 +240,7 @@ async def list_messages(
     """
     Retorna as mensagens MQTT armazenadas no banco com paginação.
     """
-    return await mc.list_messages(db, topic=topic, limit=pag.limit, offset=pag.offset) 
+    return await mc.list_message(db, topic=topic, limit=pag.limit, offset=pag.offset) 
 
 @app.get(
     "/api/v1/messages/{message_id}",
@@ -295,14 +295,14 @@ async def publish_message(body: PublicationIn, db: DB, user: CurrentUser):
             detail="The MQTT client is not connected to the broker."
         )
     
-    rc, mid = mqtt._publish(
+    rc, mid = await mqtt.publish(
         topic=body.topic,
         payload=body.payload,
         qos=body.qos,
         retain=body.retain,
         content_type=body.content_type,
         expiry_interval=body.expiry_interval,
-        user_properties={**{("published_by", user.get("username", "system"))}},
+        user_properties=f"published_by: {user}"
     )
     await mc.register_publication(
         db, 
@@ -332,7 +332,7 @@ async def list_publications(db: DB, pag: Pag, _: CurrentUser):
     Exibe o histórico de publicações deste gateway, incluindo
     o campo `confirm_in` (null = aguardando PUBACK/PUBCOMP do broker).
     """
-    return await mc.list_publications(db, limit=pag.limit, offset=pag.offset)
+    return await mc.list_publication(db, limit=pag.limit, offset=pag.offset)
 
 # == ROTAS -> /topics
 @app.get(

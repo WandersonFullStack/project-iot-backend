@@ -96,6 +96,8 @@ async def refresh(body: RefreshIn, db: DB):
     
     new_access = create_access_token(user.id, user.username)
 
+    await db.commit()
+
     return AccessTokenOut(
         access_token=new_access
     )

@@ -38,14 +38,14 @@ Pag = Annotated[PagesParams, Depends(_page_params)]
 
 # == HELPERS ===============================================================================
 
-async def _plc_or_404(db: AsyncSession, plc_id: int) -> dict:
-    row = pc.search_plc(db, plc_id)
-    if not row:
+async def _plc_or_404(db: DB, plc_id: int):
+    device = await pc.search_plc(db, plc_id)
+    if not device:
         raise HTTPException(
             status_code=404,
             detail=f"PLC id={plc_id} not found"
         )
-    return dict(row)
+    return device
 
 
 # == CRUD OF PLCs ==========================================================================
@@ -88,7 +88,7 @@ async def create_plc(body: PLCIn, db: DB, _: CurrentUser):
     )
 
     await db.commit()
-    return pc.search_plc(plc_id)
+    return plc_id
 
 @router.get(
     "",
@@ -109,7 +109,8 @@ async def list_plcs(
         summary="Search for a PLC by ID"
 )
 async def search_plc(plc_id: int, db: DB, _: CurrentUser):
-    return await pc.search_plc(_plc_or_404(db, plc_id))
+    return await _plc_or_404(db, plc_id)
+
 
 @router.patch(
         "/{plc_id}", 
@@ -129,6 +130,7 @@ async def update_plc(plc_id: int, body: PLCUpdate, db: DB, _:CurrentUser):
         plc_id,
         **{k: v for k, v in body.model_dump().items() if v is not None}
     )
+    await db.commit()
     
     return await pc.search_plc(db, plc_id)
 
@@ -145,6 +147,7 @@ async def remove_plc(plc_id: int, db: DB, _: CurrentUser):
     """
     await _plc_or_404(db, plc_id)
     await pc.update_plc(db, plc_id, active=False)
+    await db.commit()
 
 # == TESTE DE CONEXÃO ====================================================================
 
@@ -153,7 +156,7 @@ async def remove_plc(plc_id: int, db: DB, _: CurrentUser):
     response_model=TestConnectionOut,
     summary="Test the connection TCP/Modbus com o PLC"
 )
-def test_connection(plc_id: int, db: DB, _: CurrentUser):
+async def test_connection(plc_id: int, db: DB, _: CurrentUser):
     """
     Abre uma conexão Modbus TCP com o PLC, lê o registrador holding 0
     e fecha a conexão.
@@ -161,7 +164,7 @@ def test_connection(plc_id: int, db: DB, _: CurrentUser):
     Roda em thread pool (rota síncrona) -> não bloqueia o event loop
     do FastAPI durante o timeout de conexão TCP.
     """
-    plc = _plc_or_404(db, plc_id)
+    plc = await _plc_or_404(db, plc_id)
 
     try:
         from pymodbus.client import ModbusTcpClient
@@ -173,23 +176,28 @@ def test_connection(plc_id: int, db: DB, _: CurrentUser):
     
     inicio = time.perf_counter()
     client = ModbusTcpClient(
-        host=plc["ip"],
-        port=plc["port_modbus"],
-        timeout=plc["timeout"]
+        host=plc.ip,
+        port=plc.port_modbus,
+        timeout=plc.timeout
     )
 
     try:
         connected = client.connect()
         if not connected:
             return TestConnectionOut(
-                success=False, message="Failed to establish TCP connection.",
-                ip=plc["ip"], port=plc["port_modbus"], unit_id=plc["unit_id"],
+                success=False, 
+                message="Failed to establish TCP connection.",
+                ip=plc.ip, 
+                port=plc.port_modbus, 
+                unit_id=plc.unit_id,
                 time_ms=round((time.perf_counter() - inicio) * 1000, 1),
             )
         
         # Lê o primeiro holding register (FC 03) para validar comunicação
         result = client.read_holding_registers(
-            address=0, count=1, device_id=plc["unit_id"]
+            address=0, 
+            count=1, 
+            device_id=plc.unit_id
         )
         elapsed = round((time.perf_counter() - inicio) * 1000, 1)
 
@@ -197,22 +205,28 @@ def test_connection(plc_id: int, db: DB, _: CurrentUser):
             return TestConnectionOut(
                 success=False,
                 message=f"Connection OK, but reading failed: {result}",
-                ip=plc["ip"], port=plc["port_modbus"],
-                unit_id=plc["unit_id"], time_ms=elapsed,
+                ip=plc.ip, 
+                port=plc.port_modbus,
+                unit_id=plc.unit_id, 
+                time_ms=elapsed,
             )
         
         return TestConnectionOut(
             success=True,
             message="Successful Modbus connection and reading.",
-            ip=plc["ip"], port=plc["port_modbus"],
-            unit_id=plc["unit_id"], time_ms=elapsed,
+            ip=plc.ip, 
+            port=plc.port_modbus,
+            unit_id=plc.unit_id, 
+            time_ms=elapsed,
             value_reg0=result.registers[0],
         )
     
     except Exception as e:
         return TestConnectionOut(
             success=False, message=str(e),
-            ip=plc["ip"], port=plc["port_modbus"], unit_id=plc["unit_id"],
+            ip=plc.ip, 
+            port=plc.port_modbus, 
+            unit_id=plc.unit_id,
             time_ms=round((time.perf_counter() - inicio) * 1000, 1),
         )
     finally:
@@ -240,7 +254,7 @@ async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: Backgr
     total = await pc.create_register_bulk(db, plc_id, items)
 
     await db.commit()
-    await bg.add_task(pc.load_map_modbus)
+    bg.add_task(pc.load_map_modbus, db)
     
     return {"plc_id": plc_id, "inserted_or_updated": total}
 
@@ -271,7 +285,7 @@ async def export_registers_csv(
     writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({c: pc._attach_total_registers(row).get(c, "") for c in fields})
+        writer.writerow({c: getattr(row, c, "") for c in fields})
 
     return Response(
         content=buffer.getvalue(),
@@ -298,7 +312,7 @@ async def list_registers(
     await _plc_or_404(db, plc_id)
     rows = await pc.list_registers(db, plc_id, type=type, active_only=active_only,
                              limit=pag.limit, offset=pag.offset)
-    return [pc._attach_total_registers(r) for r in rows]
+    return rows
 
 @router.post(
     "/{plc_id}/registers",
@@ -334,9 +348,9 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
             detail=f"Register {body.type.value} address {body.address} There is already a patch for this PLC. Use the PATCH to update it."
         )
     await db.commit()
-    await bg.add_task(pc.load_map_modbus)
+    bg.add_task(pc.load_map_modbus, db)
 
-    return pc._attach_total_registers(pc.search_register(plc_id, register_id))
+    return await pc.search_register(db, plc_id, register_id)
 
 @router.get(
     "/{plc_id}/registers/{register_id}",
@@ -352,7 +366,7 @@ async def search_register(plc_id: int, register_id: int, db: DB):
             detail="Register not found."
         )
     
-    return pc._attach_total_registers(row)
+    return row
 
 @router.patch(
     "/{plc_id}/registers/{register_id}",
@@ -387,9 +401,9 @@ async def update_register(
         **{k: v for k, v in body.model_dump().items() if v is not None},
     )
     await db.commit()
-    await bg.add_task(pc.load_map_modbus)
+    bg.add_task(pc.load_map_modbus, db)
 
-    return pc._attach_total_registers(register)
+    return register
 
 @router.delete(
     "/{plc_id}/registers/{register_id}",
@@ -407,5 +421,6 @@ async def delete_register(plc_id: int, register_id: int, db: DB, bg: BackgroundT
             detail="Register not found."
         )
     
-    await bg.add_task(pc.load_map_modbus)
+    await db.commit()
+    bg.add_task(pc.load_map_modbus, db)
     

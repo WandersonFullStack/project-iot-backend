@@ -32,7 +32,7 @@ async def create_plc(
         timeout: float = 5.0,
 ) -> PLC:
     plc = PLC(
-        davice_id=device_id,
+        device_id=device_id,
         name=name,
         description=description,
         ip=ip,
@@ -174,7 +174,7 @@ async def create_register_bulk(
     )
 
     result = await db.execute(stmt)
-    return result.rowcout
+    return result.rowcount
 
 async def list_registers(
         db: AsyncSession,
