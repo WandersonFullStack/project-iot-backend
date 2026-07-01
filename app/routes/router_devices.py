@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import AsyncSessionLocal
-from app.controllers import device_controller as dc
+from app.controllers import device_controller as dc, plc_controller as pc
+
 from app.models.schemas import (
     DeviceIn, DeviceUpdate, DeviceOut,
     DeviceRegisterOut, RenewalKeyOut,
-    MessageOut, PagesParams
+    MessageOut, PagesParams, PLCOut
 )
 from app.auth.device_auth import generate_api_key, hash_api_key
 from app.auth.dependencies.depends import CurrentUser
@@ -95,6 +96,24 @@ async def search_device(device_id: str, db: DB, _: CurrentUser):
         )
     
     return device
+
+@router.get(
+        "/{device_id}/plc",
+        response_model=PLCOut | None,
+        summary="Search PLC linked to a device"
+)
+async def search_plc_by_device(device_id: str, db: DB, _: CurrentUser):
+    device = await dc.search_device(db, device_id)
+
+    if not device:
+        raise HTTPException(
+            status_code=404,
+            detail="Device not found"
+        )
+    
+    plc = await pc.search_plc_by_device_id(db, device_id)
+
+    return plc
 
 # -> Atualizar ==========================================
 @router.patch(

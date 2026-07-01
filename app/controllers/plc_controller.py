@@ -80,6 +80,21 @@ async def search_plc(
 
     return plc
 
+async def search_plc_by_device_id(db: AsyncSession, device_id: str) -> PLC | None:
+    result = await db.execute(
+        select(PLC)
+        .where(
+            PLC.device_id == device_id,
+            PLC.active == True
+        )
+    )
+    plc = result.scalar_one_or_none()
+
+    if plc:
+        await _attach_total_registers(db, plc)
+
+    return plc
+
 async def update_plc(
         db: AsyncSession,
         plc_id: int,

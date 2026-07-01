@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
-from app.models.schema_orm import Device, ReceivedMessage
+from app.models.schema_orm import Device, ReceivedMessage, PLC
 
 async def register_device(
         db: AsyncSession,
@@ -71,7 +71,19 @@ async def update_device(
     )
 
     return result.rowcount > 0
-    
+
+
+async def search_device_plc(db: AsyncSession, device_id: str) -> PLC | None:
+    result = await db.execute(
+        select(PLC)
+        .where(
+            PLC.device_id == device_id,
+            PLC.active == True 
+        )
+    )
+    plc = result.scalar_one_or_none()
+
+    return plc
         
 async def update_status(db: AsyncSession, device_id: str, status: str) -> None:
     """
