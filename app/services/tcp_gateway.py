@@ -47,7 +47,11 @@ class TCPSession:
             log.warning("[%s] Session ended due to idle timeout", self._peer)
             return None
         except asyncio.LimitOverrunError:
-            log.warning("[%s] Frame exceeded %d bytes -> connection closed", self._peer, config["MAX_FRAME_BYTES"])
+            log.warning(
+                "[%s] Frame exceeded %d bytes -> connection closed",
+                self._peer, 
+                config["MAX_FRAME_BYTES"]
+            )
             return None
         except(asyncio.IncompleteReadError, ConnectionAbortedError):
             return None # cliente desconectou
@@ -62,6 +66,25 @@ class TCPSession:
             log.warning("[%s] JSON invalid: %s", self._peer, e)
             await self._send({"type": "error", "reason": "JSON invalid"})
             return {} # frame inválido, mas mantém sessão
+
+    def _extract_payload(self, frame: dict, excluded_keys: tuple[str, ...]) -> object:
+        """
+        Aceita payload escalar em:
+        - payload
+        - value
+        - ou, como fallback, um único campo extra
+        """
+        if "payload" in frame:
+            return frame["payload"]
+
+        if "value" in frame:
+            return frame["value"]
+
+        extra = {k: v for k, v in frame.items() if k not in excluded_keys}
+        if len(extra) == 1:
+            return next(iter(extra.values()))
+
+        return extra
     
     async def _authenticate(self) -> bool:
         """
@@ -80,15 +103,16 @@ class TCPSession:
         
         device_id = frame.get("device_id", "")
         api_key = frame.get("api_key", "")
-        dev = self.bridge.authenticate(device_id, api_key)
-
+        async with AsyncSessionLocal() as db:
+            dev = await self.bridge.authenticate(db, device_id, api_key)
+        
         if not dev:
             await self._send({"type": "auth_fail", "reason": "Credetials invalid"})
             return False
         
         self.device = dev
         await self._send({"type": "auth_ok", "device_id": device_id, "name": dev["name"]})
-        log.info("[$s] Authenticated: %s (%s)", self._peer, device_id, dev["name"])
+        log.info("[%s] Authenticated: %s (%s)", self._peer, device_id, dev["name"])
         return True
         
     async def _process_data(self, frame: dict):
@@ -102,12 +126,16 @@ class TCPSession:
             return
         
         # Monta o payload preservando todos campos extras do frame
-        payload = {k: v for k, v in frame.items() if k not in ("type", "topic")}
-        row_id = self.bridge.to_forward(
-            device_id=self.device["device_id"],
-            topic=topic,
-            payload=payload,
-        )
+        payload = self._extract_payload(frame, ("type", "topic"))
+
+        async with AsyncSessionLocal() as db:
+            row_id = await self.bridge.to_forward(
+                db,
+                device_id=self.device["device"],
+                topic=topic,
+                payload=payload,
+            )
+        
         await self._send({"type": "ack", "id": row_id})
 
     async def _process_batch(self, frame: dict):
@@ -117,7 +145,10 @@ class TCPSession:
         """
         readings = frame.get("readings", [])
         if len(readings) > config["MAX_BATCH_READING"]:
-            await self._send({"type": "error", "reason": f"Batch exceeds {config["MAX_BATCH_READING"]} items"})
+            await self._send({
+                "type": "error", 
+                "reason": f"Batch exceeds {config["MAX_BATCH_READING"]} items"
+            })
             return
         
         ids = []
@@ -126,12 +157,15 @@ class TCPSession:
             if not topic:
                 continue
 
-            payload = {k: v for k, v in read.items() if k != "topic"}
-            row_id = self.bridge.to_forward(
-                device_id=self.device["device_id"],
-                topic=topic,
-                payload=payload,
-            )
+            payload = self._extract_payload(read, ("topic",))
+            
+            async with AsyncSessionLocal() as db:
+                row_id = await self.bridge.to_forward(
+                    db,
+                    device_id=self.device["device"],
+                    topic=topic,
+                    payload=payload,
+                )
             ids.append(row_id)
 
         await self._send({"type": "ack", "batch_ids": ids, "count": len(ids)})

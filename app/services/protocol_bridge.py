@@ -48,7 +48,7 @@ class ProtocolBridge:
             db: AsyncSession,
             device_id: str,
             topic: str,
-            payload: str | dict,
+            payload: str | dict | int | float | bool | bytes | bytearray,
             qos: int = 1,
             content_type: str = "application/json"
     ) -> int:
@@ -57,10 +57,14 @@ class ProtocolBridge:
         Retorna o ID do registro inserido no banco.
         """
         if isinstance(payload, dict):
-            payload = json.dumps(payload, default=str)
+            payload = json.dumps(payload, default=str, ensure_ascii=False)
+        elif isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode("utf-8", errors="replace")
+        elif not isinstance(payload, str):
+            payload = str(payload)
 
         # Publica no broker MQTT
-        rc, mid = await self.mqtt._publish(
+        rc, mid = await self.mqtt.publish(
             topic=topic,
             payload=payload,
             qos=qos,
@@ -72,7 +76,7 @@ class ProtocolBridge:
         )
 
         # Persiste no banco vinculando ao dispositivo
-        message = await mc.insert_messages(
+        message = await mc.insert_message(
             db,
             device_id=device_id,
             topic=topic,

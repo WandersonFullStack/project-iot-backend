@@ -175,7 +175,7 @@ async def messages_device(device_id: str, db: DB, pag: Pag, _: CurrentUser):
     """
     Retorna o histórico de mensagens vinculadas a este device_id.
     """
-    if not dc.search_device(db, device_id):
+    if not await dc.search_device(db, device_id):
         raise HTTPException(
             status_code=404,
             detail="Device not found."

@@ -27,7 +27,7 @@ def create_access_token(user_id: int, username: str) -> str:
     payload = {
         "sub": str(user_id),
         "username": username,
-        "jti": str(uuid.uuid4)
+        "jti": str(uuid.uuid4())
     }
 
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
