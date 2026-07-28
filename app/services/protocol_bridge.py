@@ -91,6 +91,13 @@ class ProtocolBridge:
 
         await db.commit()
 
+        self.mqtt.broadcast_message(
+            device_id=device_id,
+            topic=topic,
+            payload=payload,
+            qos=qos,
+        )
+
         log.info(
             "Forwarded: device=%s topic=%s mid=%d msg_id=%d",
             device_id,

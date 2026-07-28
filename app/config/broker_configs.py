@@ -5,7 +5,10 @@ mqtt_broker_configs = {
     "PORT": 1883,
     "CLIENT_ID": "mqtt_client",
     "KEEPALIVE": 60,
-    "TOPIC": [],    # (tópico, QoS)
+    "TOPIC": [
+        ("application/devices/#", 1),   # (tópico, QoS)
+        ("application/devices/#", 2),
+    ],    
     "DB_PATH": "mqtt_data.db"
 }
 

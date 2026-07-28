@@ -120,13 +120,16 @@ class TCPSession:
         Frame simples de dados único.
         O gateway monta o payload JSON e encaminha via ProtocolBridge.
         """
-        topic = frame.get("topic")
-        if not topic:
-            await self._send({"type": "error", "reason": "Field 'topic' absent"})
+        metric = frame.get("metric")
+        if not metric:
+            await self._send({"type": "error", "reason": "Field 'metric' absent"})
             return
+
+        device_id = self.device["device"]
+        topic = f"application/devices/{device_id}/{metric}"
         
         # Monta o payload preservando todos campos extras do frame
-        payload = self._extract_payload(frame, ("type", "topic"))
+        payload = self._extract_payload(frame, ("type", "metric"))
 
         async with AsyncSessionLocal() as db:
             row_id = await self.bridge.to_forward(
@@ -153,10 +156,12 @@ class TCPSession:
         
         ids = []
         for read in readings:
-            topic = read.get("topic")
-            if not topic:
+            metric = read.get("metric")
+            if not metric:
                 continue
 
+            device_id = self.device["device"]
+            topic = f"application/devices/{device_id}/{metric}"
             payload = self._extract_payload(read, ("topic",))
             
             async with AsyncSessionLocal() as db:
@@ -254,7 +259,7 @@ class TCPGateway:
             msg_id = await self.bridge.to_forward(
                 db,
                 device_id=device_id,
-                topic=f"tcp/{device_id}/data",
+                topic=f"application/devices/{device_id}/data",
                 payload=data,
                 qos=1
             )

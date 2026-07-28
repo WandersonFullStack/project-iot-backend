@@ -17,6 +17,7 @@ from app.services.protocol_bridge import ProtocolBridge
 from app.config.broker_configs import log
 from app.controllers import plc_controller as pc
 
+
 # == MAPEAMENTO DE REGISTRADORES -> TÓPICOS MQTT ==================
 @dataclass
 class MapRegister:
@@ -71,7 +72,7 @@ class ModbusGateway:
         self.port = port
         self._task: asyncio.Task | None = None
 
-    def _on_writing(
+    async def _on_writing(
             self,
             map: MapRegister,
             real_value: float,
@@ -84,19 +85,21 @@ class ModbusGateway:
             "Modbus writing | reg=%d value=%s %s -> %s",
             map.address, real_value, map.unit, map.topic,
         )
-        try:
-            self.bridge.to_forward(
-                device_id=map.device_id,
-                topic=map.topic,
-                payload={
-                    "value": real_value,
-                    "gross_value": gross_value,
-                    "unit": map.unit,
-                    "registrar": map.address,
-                },
-            )
-        except Exception as e:
-            log.error("Error forwarding Modbus reading: %s", e)
+        async with AsyncSessionLocal() as db:
+            try:
+                await self.bridge.to_forward(
+                    db,
+                    device_id=map.device_id,
+                    topic=map.topic,
+                    payload={
+                        "value": real_value,
+                        "gross_value": gross_value,
+                        "unit": map.unit,
+                        "registrar": map.address,
+                    },
+                )
+            except Exception as e:
+                log.error("Error forwarding Modbus reading: %s", e)
 
     def _build_context(self) -> ModbusServerContext:
         """
@@ -153,11 +156,14 @@ class ModbusGateway:
             # Aplicar scale/offset
             real_value = value * register.scale + register.offset
 
+            metric = register.topic
+            topic = f"application/devices/{plc.device_id}/{metric}"
+
             # Publicar via bridge
             msg_id = await self.bridge.to_forward(
                 db,
                 device_id=plc.device_id,
-                topic=register.topic,
+                topic=topic,
                 payload={"value": real_value, "unit": register.unit},
                 qos=register.qos
             )

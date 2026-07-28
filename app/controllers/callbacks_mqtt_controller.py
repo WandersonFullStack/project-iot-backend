@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Callable
+import uuid
 
 import paho.mqtt.client as mqtt
 from paho.mqtt.properties import Properties
@@ -62,6 +63,25 @@ class CallbacksMQTTContrller:
             except asyncio.QueueFull:
                 log.warning("WebSocket queue cheia - mensagem descartada")
 
+    def broadcast_message(
+            self,
+            *,
+            device_id: str,
+            topic: str,
+            payload: str,
+            qos: int,
+            retain: bool = False,
+    ) -> None:
+        self._broadcast_for_ws(
+            {
+                "device_id": device_id,
+                "topic": topic,
+                "payload": payload,
+                "qos": qos,
+                "retain": retain,
+            }
+        )
+
     # -> Helper para executar assync desde callbacks de thread
 
     def _run_async_task(self, coro):
@@ -74,6 +94,18 @@ class CallbacksMQTTContrller:
             return
         
         asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def _device_id_from_topic(self, topic: str) -> str | None:
+        parts = topic.split("/")
+
+        if len(parts) < 4 or parts[0] != "application" or parts[1] != "devices":
+            return None
+
+        try:
+            return str(uuid.UUID(parts[2]))
+        except ValueError:
+            return None
+        
 
     # -> Callbacks MQTT
 
@@ -151,11 +183,13 @@ class CallbacksMQTTContrller:
         user_props_str = str(user_props_raw) if user_props_raw else None
 
         # Extrair device_id das UserProperties
-        device_id = None
-        for key, value in user_props_raw:
-            if key == "device_id":
-                device_id = value
-                break
+        device_id = self._device_id_from_topic(topic)
+        
+        if not device_id:
+            for key, value in user_props_raw:
+                if key == "device_id":
+                    device_id = value
+                    break
 
         # Enfileirar operação assincrona de persistência
         self._run_async_task(
