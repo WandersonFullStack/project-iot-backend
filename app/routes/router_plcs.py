@@ -394,16 +394,19 @@ async def update_register(
             status_code=404,
             detail="Register not found."
         )
+    
+    fields = body.model_dump(exclude_unset=True)
+
     await pc.update_register(
         db,
         register_id, 
         plc_id,
-        **{k: v for k, v in body.model_dump().items() if v is not None},
+        **fields,
     )
     await db.commit()
     bg.add_task(pc.load_map_modbus, db)
 
-    return register
+    return await pc.search_register(db, plc_id, register_id)
 
 @router.delete(
     "/{plc_id}/registers/{register_id}",

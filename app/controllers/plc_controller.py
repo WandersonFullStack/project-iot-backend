@@ -239,7 +239,7 @@ async def update_register(
     allowed = {"topic", "description", "unit", "scale",
                "offset", "qos", "read_only", "active"}
     
-    values = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    values = {k: v for k, v in fields.items() if k in allowed}
     if not values:
         return False
     
