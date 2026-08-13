@@ -115,6 +115,7 @@ class MapRegister(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     plc_id: Mapped[int] = mapped_column(Integer, ForeignKey("plcs.id"))
     type: Mapped[str] = mapped_column(String(20))
+    tag_name: Mapped[str] = mapped_column(String(30))
     address: Mapped[int] = mapped_column(Integer)
     topic: Mapped[str] = mapped_column(String)
     description: Mapped[Optional[str]] = mapped_column(Text)

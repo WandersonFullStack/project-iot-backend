@@ -277,7 +277,7 @@ async def export_registers_csv(
     rows = await pc.list_registers(db, plc_id, active_only=active_only)
 
     fields = [
-        "type", "address", "address_modbus", "topic", "unit",
+        "type", "tag_name", "address", "address_modbus", "topic", "unit",
         "scale", "offset", "qos", "read_only", "description",
     ]
 
@@ -332,6 +332,7 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
         db,
         plc_id=plc_id,
         type=body.type.value,
+        tag_name=body.tag_name,
         address=body.address,
         topic=body.topic,
         description=body.description,
@@ -382,7 +383,7 @@ async def update_register(
     _: CurrentUser
 ):
     """
-    Apenas tópico, descrição, unidade, escala, offset, qos e ativo
+    Apenas tag_name, tópico, descrição, unidade, escala, offset, qos e ativo
     são atualizáveis. O tipo e o endereço são imutáveis após a criação
     pois identificam unicamente o registrador no protocolo Modbus.
     Para trocar tipo/endereço, delete e recrie.

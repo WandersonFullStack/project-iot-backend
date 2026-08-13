@@ -119,6 +119,7 @@ async def create_register(
         db:AsyncSession,
         plc_id: int,
         type: str,
+        tag_name: str,
         address: int,
         topic: str,
         description: str | None = None,
@@ -133,7 +134,7 @@ async def create_register(
     stmt = (
         pg_insert(MapRegister)
         .values(
-            plc_id=plc_id, type=type, address=address, topic=topic,
+            plc_id=plc_id, type=type, tag_name=tag_name, address=address, topic=topic,
             description=description, unit=unit, scale=scale,
             offset=offset, qos=qos, read_only=read_only,
         )
@@ -163,6 +164,7 @@ async def create_register_bulk(
         {
             "plc_id": plc_id,
             "type": item["type"],
+            "tag_name": item["tag_name"],
             "address": item["address"],
             "topic": item["topic"],
             "description": item.get("description"),
@@ -178,6 +180,7 @@ async def create_register_bulk(
     stmt = stmt.on_conflict_do_update(
         constraint="uq_register_plc_type_address",
         set_={
+            "tag_name": stmt.excluded.tag_name,
             "topic": stmt.excluded.topic,
             "description": stmt.excluded.description,
             "unit": stmt.excluded.unit,
@@ -236,7 +239,7 @@ async def update_register(
         plc_id: int,
         **fields,
 ) -> bool:
-    allowed = {"topic", "description", "unit", "scale",
+    allowed = {"tag_name", "topic", "description", "unit", "scale",
                "offset", "qos", "read_only", "active"}
     
     values = {k: v for k, v in fields.items() if k in allowed}

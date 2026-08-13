@@ -51,6 +51,7 @@ class PLCUpdate(BaseModel):
 
 class MapRegisterIn(BaseModel):
     type: TypeRegister
+    tag_name: str = Field(..., min_length=1)
     address: int = Field(..., ge=0, le=65534)
     topic: str = Field(..., examples=["boiler/temperature"])
     description: Optional[str] = None
@@ -64,6 +65,7 @@ class MapRegisterOut(BaseModel):
     id: int
     plc_id: int
     type: str
+    tag_name: str
     address: int
     address_modbus: int # calculado: endereço + offset do type
     topic: str
@@ -79,6 +81,7 @@ class MapRegisterOut(BaseModel):
     model_config = {"from_attributes": True}
 
 class MapRegisterUpdate(BaseModel):
+    tag_name: Optional[str] = None
     topic: Optional[str] = None
     description: Optional[str] = None
     unit: Optional[str] = None

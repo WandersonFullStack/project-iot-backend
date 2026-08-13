@@ -109,6 +109,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('plc_id', sa.Integer(), nullable=False),
     sa.Column('type', sa.String(length=20), nullable=False),
+    sa.Column('tag_name', sa.String(length=30), nullable=False),
     sa.Column('address', sa.Integer(), nullable=False),
     sa.Column('topic', sa.String(), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
