@@ -5,7 +5,7 @@ import os
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://mqttgateway:mqttdev@localhost:5434/system-iot-db"
+    "postgresql+asyncpg://mqttgateway:adm1n473@localhost:5432/system-iot"
 )
 
 engine = create_async_engine(DATABASE_URL, echo=False)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import ssl
 from typing import Callable
 import uuid
 
@@ -34,6 +35,20 @@ class CallbacksMQTTContrller:
             client_id=config["CLIENT_ID"],
             protocol=mqtt.MQTTv5,
         )
+
+        if config["USERNAME"]:
+            self.client.username_pw_set(
+                username=config["USERNAME"],
+                password=config["PASSWORD"],
+            )
+
+        if config["TLS_ENABLED"]:
+            self.client.tls_set(
+                ca_certs=config["CA_CERT"],
+                cert_reqs=ssl.CERT_REQUIRED,
+                tls_version=ssl.PROTOCOL_TLS_CLIENT,
+            )
+            self.client.tls_insecure_set(False)
 
         # Registrar callbacks
         self.client.on_connect = self._on_connect
@@ -375,7 +390,12 @@ class CallbacksMQTTContrller:
                 properties=props
             )
         self.client.loop_start() # thread daemon gerenciada pelo Paho
-        log.info("Controller MQTT started.")
+        log.info(
+            "Controller MQTT started | broker=%s:%d tls=%s",
+            config["HOST"],
+            config["PORT"],
+            config["TLS_ENABLED"],
+        )
         
     def stop(self):
         """Encerra a conexão de forma limpa, publicando o DISCONNECT com props."""

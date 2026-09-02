@@ -48,8 +48,16 @@ from app.auth.dependencies.depends import CurrentUser
 
 mqtt = CallbacksMQTTContrller()
 bridge = ProtocolBridge(mqtt)
-tcp_gw = TCPGateway(bridge)
-modbus_gw = ModbusGateway(bridge)
+tcp_gw = TCPGateway(
+    bridge,
+    host=os.getenv("TCP_GATEWAY_HOST", "0.0.0.0"),
+    port=int(os.getenv("TCP_GATEWAY_PORT", "9000")),
+)
+modbus_gw = ModbusGateway(
+    bridge,
+    host=os.getenv("MODBUS_HOST", "0.0.0.0"),
+    port=int(os.getenv("MODBUS_PORT", "502")),
+)
 
 # == MANAGED DEPENDENCIES =============================================
 

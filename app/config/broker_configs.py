@@ -1,10 +1,23 @@
+import os
 import logging
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 mqtt_broker_configs = {
-    "HOST": "localhost",
-    "PORT": 1883,
-    "CLIENT_ID": "mqtt_client",
-    "KEEPALIVE": 60,
+    "HOST": os.getenv("MQTT_HOST", "localhost"),
+    "PORT": int(os.getenv("MQTT_PORT", "1883")),
+    "CLIENT_ID": os.getenv("MQTT_CLIENT_ID", "mqtt_client"),
+    "KEEPALIVE": int(os.getenv("MQTT_KEEPALIVE", "60")),
+    "USERNAME": os.getenv("MQTT_USERNAME"),
+    "PASSWORD": os.getenv("MQTT_PASSWORD"),
+    "TLS_ENABLED": _env_bool("MQTT_TLS_ENABLED"),
+    "CA_CERT": os.getenv("MQTT_CA_CERT"),
     "TOPIC": [
         ("application/devices/#", 1),   # (tópico, QoS)
         ("application/devices/#", 2),
