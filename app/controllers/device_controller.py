@@ -8,6 +8,7 @@ from app.models.schema_orm import Device, ReceivedMessage, PLC
 
 async def register_device(
         db: AsyncSession,
+        user_id: int,
         device_id,
         name,
         description,
@@ -18,6 +19,7 @@ async def register_device(
     Persiste um novo dispositivo.
     """
     device = Device(
+        user_id=user_id,
         device_id=device_id, 
         name=name, 
         description=description, 
@@ -29,18 +31,45 @@ async def register_device(
     await db.flush()
     return device
         
-async def search_device(db: AsyncSession, device_id: str) -> Device | None:
-    result = await db.execute(select(Device).where(Device.device_id == device_id))
+async def search_device(
+        db: AsyncSession,
+        device_id: str,
+        user_id: int,
+) -> Device | None:
+    result = await db.execute(
+        select(Device).where(
+            Device.device_id == device_id,
+            Device.user_id == user_id,
+        )
+    )
 
+    return result.scalar_one_or_none()
+
+
+async def search_device_internal(
+        db: AsyncSession,
+        device_id: str,
+) -> Device | None:
+    """Lookup for trusted device-authentication and MQTT ingestion paths."""
+    result = await db.execute(
+        select(Device).where(Device.device_id == device_id)
+    )
     return result.scalar_one_or_none()
         
 async def list_device(
         db:AsyncSession,
+        user_id: int,
         active_only: bool = True,
         limit: int = 50,
         offset: int = 0,
 ) -> list[Device]:
-    stmt = select(Device).order_by(Device.name).limit(limit).offset(offset)
+    stmt = (
+        select(Device)
+        .where(Device.user_id == user_id)
+        .order_by(Device.name)
+        .limit(limit)
+        .offset(offset)
+    )
 
     if active_only:
         stmt = stmt.where(Device.active ==True)
@@ -48,9 +77,36 @@ async def list_device(
     result = await db.execute(stmt)
 
     return list(result.scalars().all())
+
+
+async def list_device_ids(db: AsyncSession, user_id: int) -> set[str]:
+    result = await db.execute(
+        select(Device.device_id).where(
+            Device.user_id == user_id,
+            Device.active == True,
+        )
+    )
+    return set(result.scalars().all())
+
+
+async def search_device_by_topic(
+        db: AsyncSession,
+        topic: str,
+        user_id: int,
+) -> Device | None:
+    """Resolve an exact publish topic within the authenticated user's devices."""
+    result = await db.execute(
+        select(Device).where(
+            Device.user_id == user_id,
+            Device.active == True,
+            Device.topics.any(topic),
+        )
+    )
+    return result.scalars().first()
     
 async def update_device(
         db: AsyncSession,
+        user_id: int,
         device_id: str,
         name: str | None = None,
         description: str | None = None,
@@ -67,18 +123,29 @@ async def update_device(
         return False
     
     result = await db.execute(
-        update(Device).where(Device.device_id == device_id).values(**values)
+        update(Device)
+        .where(
+            Device.device_id == device_id,
+            Device.user_id == user_id,
+        )
+        .values(**values)
     )
 
     return result.rowcount > 0
 
 
-async def search_device_plc(db: AsyncSession, device_id: str) -> PLC | None:
+async def search_device_plc(
+        db: AsyncSession,
+        device_id: str,
+        user_id: int,
+) -> PLC | None:
     result = await db.execute(
         select(PLC)
+        .join(Device, PLC.device_id == Device.device_id)
         .where(
             PLC.device_id == device_id,
-            PLC.active == True 
+            PLC.active == True,
+            Device.user_id == user_id,
         )
     )
     plc = result.scalar_one_or_none()
@@ -109,10 +176,19 @@ async def update_offline_devices(db: AsyncSession, timeout: int = 5) -> None:
         ).values(status="offline")
     )
 
-async def renew_api_key(db: AsyncSession, device_id: str, new_hash: str) -> bool:
+async def renew_api_key(
+        db: AsyncSession,
+        device_id: str,
+        user_id: int,
+        new_hash: str,
+) -> bool:
     result = await db.execute(
         update(Device)
-        .where(Device.device_id == device_id, Device.active == True)
+        .where(
+            Device.device_id == device_id,
+            Device.user_id == user_id,
+            Device.active == True,
+        )
         .values(api_key_hash=new_hash)
     )
 
@@ -121,12 +197,17 @@ async def renew_api_key(db: AsyncSession, device_id: str, new_hash: str) -> bool
 async def messages_device(
         db: AsyncSession,
         device_id: str,
+        user_id: int,
         limit: int = 20,
         offset: int = 0,
 ) -> list[ReceivedMessage]:
     result = await db.execute(
         select(ReceivedMessage)
-        .where(ReceivedMessage.device_id == device_id)
+        .join(Device, ReceivedMessage.device_id == Device.device_id)
+        .where(
+            ReceivedMessage.device_id == device_id,
+            Device.user_id == user_id,
+        )
         .order_by(ReceivedMessage.id.desc())
         .limit(limit)
         .offset(offset)

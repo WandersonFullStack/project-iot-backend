@@ -4,7 +4,7 @@ from sqlalchemy import select, update, delete, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schema_orm import PLC, MapRegister
+from app.models.schema_orm import Device, PLC, MapRegister
 
 # -> HELPER INTERNO
 async def _attach_total_registers(
@@ -51,11 +51,19 @@ async def create_plc(
 
 async def list_plcs(
         db: AsyncSession,
+        user_id: int,
         active_only: bool = True,
         limit: int = 50,
         offset: int = 0,
 ) -> list[PLC]:
-    stmt = select(PLC).order_by(PLC.name).limit(limit).offset(offset)
+    stmt = (
+        select(PLC)
+        .join(Device, PLC.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
+        .order_by(PLC.name)
+        .limit(limit)
+        .offset(offset)
+    )
 
     if active_only:
         stmt = stmt.where(PLC.active == True)
@@ -70,9 +78,17 @@ async def list_plcs(
 
 async def search_plc(
         db: AsyncSession,
-        plc_id: int
+        plc_id: int,
+        user_id: int,
 ) -> PLC | None:
-    result = await db.execute(select(PLC).where(PLC.id == plc_id))
+    result = await db.execute(
+        select(PLC)
+        .join(Device, PLC.device_id == Device.device_id)
+        .where(
+            PLC.id == plc_id,
+            Device.user_id == user_id,
+        )
+    )
     plc = result.scalar_one_or_none()
 
     if plc:
@@ -80,12 +96,31 @@ async def search_plc(
 
     return plc
 
-async def search_plc_by_device_id(db: AsyncSession, device_id: str) -> PLC | None:
+
+async def search_plc_internal(
+        db: AsyncSession,
+        plc_id: int,
+) -> PLC | None:
+    """Lookup reserved for trusted industrial-protocol paths."""
+    result = await db.execute(select(PLC).where(PLC.id == plc_id))
+    plc = result.scalar_one_or_none()
+    if plc:
+        await _attach_total_registers(db, plc)
+    return plc
+
+
+async def search_plc_by_device_id(
+        db: AsyncSession,
+        device_id: str,
+        user_id: int,
+) -> PLC | None:
     result = await db.execute(
         select(PLC)
+        .join(Device, PLC.device_id == Device.device_id)
         .where(
             PLC.device_id == device_id,
-            PLC.active == True
+            PLC.active == True,
+            Device.user_id == user_id,
         )
     )
     plc = result.scalar_one_or_none()
@@ -98,6 +133,7 @@ async def search_plc_by_device_id(db: AsyncSession, device_id: str) -> PLC | Non
 async def update_plc(
         db: AsyncSession,
         plc_id: int,
+        user_id: int,
         **fields
 ) -> bool:
     allowed = {"name", "description", "ip", "port_modbus", "port_tcp",
@@ -109,7 +145,14 @@ async def update_plc(
         return False
     
     result = await db.execute(
-        update(PLC).where(PLC.id == plc_id).values(**values)
+        update(PLC)
+        .where(
+            PLC.id == plc_id,
+            PLC.device_id.in_(
+                select(Device.device_id).where(Device.user_id == user_id)
+            ),
+        )
+        .values(**values)
     )
 
     return result.rowcount > 0

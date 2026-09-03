@@ -29,7 +29,7 @@ from app.models.schemas import (
 )
 from app.models.schema_orm import MapRegister as MapRegisterORM
 
-from app.config.database import AsyncSessionLocal, engine, Base
+from app.config.database import AsyncSessionLocal, engine
 from app.config.broker_configs import log, mqtt_broker_configs as config
 
 from app.services.tcp_gateway import TCPGateway
@@ -57,6 +57,9 @@ modbus_gw = ModbusGateway(
     bridge,
     host=os.getenv("MODBUS_HOST", "0.0.0.0"),
     port=int(os.getenv("MODBUS_PORT", "502")),
+)
+ENABLE_UNSCOPED_MODBUS_GATEWAY = (
+    os.getenv("ENABLE_UNSCOPED_MODBUS_GATEWAY", "false").lower() == "true"
 )
 
 # == MANAGED DEPENDENCIES =============================================
@@ -88,6 +91,9 @@ async def reload_map_modbus() -> None:
     Chamada após criar/atualizar/deletar registradores via API.
     Executa em background para não bloquear a resposta HTTP.
     """
+    if not ENABLE_UNSCOPED_MODBUS_GATEWAY:
+        return
+
     async with AsyncSessionLocal() as db:
         registers = await pc.load_map_modbus(db)
         new_map = [
@@ -112,21 +118,23 @@ async def lifespan(app: FastAPI):
 
     log.info("Starting MQTT Gateway...")
 
-    # Cria tabelas
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    
-    log.info("Database schema initialized")
-
     # Inicia todos os servidores concorrentemente
     loop = asyncio.get_event_loop()
     mqtt.start(loop)
 
     await tcp_gw.start()
-    await modbus_gw.start()
-    await reload_map_modbus() # carrega o mapa salvo no banco ao iniciar
+    if ENABLE_UNSCOPED_MODBUS_GATEWAY:
+        log.warning(
+            "Starting the shared Modbus gateway. This endpoint is not "
+            "tenant-aware and must only be exposed in a trusted network."
+        )
+        await modbus_gw.start()
+        await reload_map_modbus()
     
-    log.info("MQTT, TCP and Modbus Gateways started")
+    log.info(
+        "MQTT and TCP gateways started; shared Modbus gateway enabled=%s",
+        ENABLE_UNSCOPED_MODBUS_GATEWAY,
+    )
 
     # iniciar monitoramento de dispositivos offline em background
     async def _loop_monitor():
@@ -150,7 +158,8 @@ async def lifespan(app: FastAPI):
         pass
 
     await tcp_gw.stop()
-    await modbus_gw.stop()
+    if ENABLE_UNSCOPED_MODBUS_GATEWAY:
+        await modbus_gw.stop()
     mqtt.stop() # disconnect + loop_stop()
     await engine.dispose()
 
@@ -213,13 +222,13 @@ async def root():
     summary="MQTT connection status and database statistics",
     tags=["System"]
 )
-async def get_status(db: DB, _: CurrentUser):
+async def get_status(db: DB, user: CurrentUser):
     """
     Retorna o estado atual do cliente MQTT e contagens do banco.
     Útil para health checks e monitoramento.
     """
-    msg_count = await mc.count_messages(db)
-    pub_count = await mc.count_publications(db)
+    msg_count = await mc.count_messages(db, user.id)
+    pub_count = await mc.count_publications(db, user.id)
 
     return StatusOut(
         mqtt_connected=mqtt.connected,
@@ -239,16 +248,22 @@ async def get_status(db: DB, _: CurrentUser):
 async def list_messages(
     db: DB,
     pag: Pag,
+    user: CurrentUser,
     topic: Optional[str] = Query(
         default=None,
         description="Topic filter. Accepts '%' wildcard: 'home/%'",
     ),
-    _: CurrentUser = None
 ):
     """
     Retorna as mensagens MQTT armazenadas no banco com paginação.
     """
-    return await mc.list_message(db, topic=topic, limit=pag.limit, offset=pag.offset) 
+    return await mc.list_message(
+        db,
+        user.id,
+        topic=topic,
+        limit=pag.limit,
+        offset=pag.offset,
+    )
 
 @app.get(
     "/api/v1/messages/{message_id}",
@@ -256,8 +271,8 @@ async def list_messages(
     summary="Search for a message by ID.",
     tags=["Messages"]
 )
-async def search_message(message_id: int, db: DB, _: CurrentUser):
-    message = await mc.search_message(db, message_id)
+async def search_message(message_id: int, db: DB, user: CurrentUser):
+    message = await mc.search_message(db, message_id, user.id)
     if not message:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -271,12 +286,12 @@ async def search_message(message_id: int, db: DB, _: CurrentUser):
     summary="Remove a message from the database.",
     tags=["Messages"]
 )
-async def delete_message(message_id: int, db: DB, _: CurrentUser):
+async def delete_message(message_id: int, db: DB, user: CurrentUser):
     """
     Deleta a mensagem localmente - não afeta o broker.
     Retorna 204 No Content em caso de sucesso.
     """
-    ok = await mc.delete(db, message_id)
+    ok = await mc.delete_message(db, message_id, user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Message not found.")
     
@@ -302,24 +317,28 @@ async def publish_message(body: PublicationIn, db: DB, user: CurrentUser):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The MQTT client is not connected to the broker."
         )
+
+    device = await dc.search_device_by_topic(db, body.topic, user.id)
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No owned active device is authorized for this topic.",
+        )
     
     rc, mid = await mqtt.publish(
+        device_id=device.device_id,
         topic=body.topic,
         payload=body.payload,
         qos=body.qos,
         retain=body.retain,
         content_type=body.content_type,
         expiry_interval=body.expiry_interval,
-        user_properties=f"published_by: {user}"
+        user_properties=[
+            ("published_by", str(user.id)),
+            ("device_id", device.device_id),
+            *(body.user_properties or []),
+        ],
     )
-    await mc.register_publication(
-        db, 
-        topic=body.topic,
-        payload=body.payload,
-        qos=body.qos,
-        mid=mid
-    )
-    await db.commit()
 
     return {
         "status": "quered",
@@ -335,12 +354,14 @@ async def publish_message(body: PublicationIn, db: DB, user: CurrentUser):
     summary="List of messages posted by this client.",
     tags=["Publications"]
 )
-async def list_publications(db: DB, pag: Pag, _: CurrentUser):
+async def list_publications(db: DB, pag: Pag, user: CurrentUser):
     """
     Exibe o histórico de publicações deste gateway, incluindo
     o campo `confirm_in` (null = aguardando PUBACK/PUBCOMP do broker).
     """
-    return await mc.list_publication(db, limit=pag.limit, offset=pag.offset)
+    return await mc.list_publication(
+        db, user.id, limit=pag.limit, offset=pag.offset
+    )
 
 # == ROTAS -> /topics
 @app.get(
@@ -349,11 +370,11 @@ async def list_publications(db: DB, pag: Pag, _: CurrentUser):
     summary="List the distinct topics already received.",
     tags=["Messages"]
 )
-async def list_topics(db: DB, _: CurrentUser):
+async def list_topics(db: DB, user: CurrentUser):
     """
     Discovery: retorna todos os tópicos únicos que já chegaram ao gateway.
     """
-    return await mc.distinct_topics(db)
+    return await mc.distinct_topics(db, user.id)
 
 # == WEBSOCKET -> /ws ==================================================
 @app.websocket("/api/v1/ws")
@@ -383,12 +404,13 @@ async def websocket_stream(
                 reason="User not found or inactive"
             )
             return
+        device_ids = await dc.list_device_ids(db, user_id)
 
     await websocket.accept()
     
     # Fila com limite de mensagens em buffer por cliente
     q: asyncio.Queue[dict] = asyncio.Queue(maxsize=50)
-    mqtt.register_ws_queue(q)
+    mqtt.register_ws_queue(q, device_ids)
 
     try:
         while True:

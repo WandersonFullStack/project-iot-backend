@@ -1,8 +1,33 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
+import ipaddress
+import os
+
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 from datetime import datetime
 from enum import Enum
+
+
+_PLC_ALLOWED_NETWORKS = tuple(
+    ipaddress.ip_network(network.strip())
+    for network in os.getenv(
+        "PLC_ALLOWED_NETWORKS",
+        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+    ).split(",")
+    if network.strip()
+)
+
+
+def _validate_plc_ip(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise ValueError("PLC ip must be a literal IP address.") from exc
+
+    if not any(address in network for network in _PLC_ALLOWED_NETWORKS):
+        raise ValueError("PLC ip is outside the configured allowed networks.")
+    return str(address)
+
 
 class TypeRegister(str, Enum):
     holding = "holding"   # FC 03/06/16 -> leitura/escrita, 16 bits
@@ -20,6 +45,11 @@ class PLCIn(BaseModel):
     description: Optional[str] = None
     unit_id: int = Field(default=255, ge=0, le=255, description="Modbus address of the slave (255=broadcast)")
     timeout: float = Field(default=5.0, ge=0.5, le=60.0)
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        return _validate_plc_ip(value)
 
 class PLCOut(BaseModel):
     id: int
@@ -48,6 +78,11 @@ class PLCUpdate(BaseModel):
     unit_id: Optional[int] = Field(default=None, ge=0, le=255)
     timeout: Optional[float] = Field(default=None, ge=0.5, le=60.0)
     active: Optional[bool] = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_plc_ip(value) if value is not None else None
 
 class MapRegisterIn(BaseModel):
     type: TypeRegister

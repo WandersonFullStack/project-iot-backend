@@ -28,7 +28,7 @@ class ProtocolBridge:
         ou None se o device_id não existir, estiver inativo ou a
         api_key não corresponder ao hash armazenado.
         """
-        device = await dc.search_device(db, device_id)
+        device = await dc.search_device_internal(db, device_id)
         if not device or not device.active:
             log.warning("Auth failed -> uncknown or inactive device_id: %s", device_id)
             return None
@@ -65,6 +65,7 @@ class ProtocolBridge:
 
         # Publica no broker MQTT
         rc, mid = await self.mqtt.publish(
+            device_id=device_id,
             topic=topic,
             payload=payload,
             qos=qos,

@@ -58,9 +58,7 @@ async def create_user(body: UserIn, db: DB):
     summary="updated user"
 )
 async def update_user(user_id: int, body: UserUpdate, db: DB, user: CurrentUser):
-    corrent_user = await uc.search_user_by_id(db, user_id)
-
-    if not user:
+    if user.id != user_id:
         raise HTTPException(
             status_code=404,
             detail="User not found."
@@ -72,9 +70,9 @@ async def update_user(user_id: int, body: UserUpdate, db: DB, user: CurrentUser)
     )
     await db.commit()
 
-    corrent_user = await uc.search_user_by_id(db, user_id)
+    current_user = await uc.search_user_by_id(db, user_id)
 
-    return corrent_user
+    return current_user
 
 @router.post(
     "/{user_id}/change-password",
@@ -91,12 +89,19 @@ async def change_password(
     Após troca de senha, todos os refresh tokens são revogados — forçando
     re-autenticação em todos os dispositivos.
     """
-    target = await uc.search_user_by_id(db, user_id)
-
-    if not target:
+    if logged_in_user.id != user_id:
         raise HTTPException(
             status_code=404,
             detail="User not found."
+        )
+
+    if not verify_password(
+        body.current_password,
+        logged_in_user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect.",
         )
     
     await uc.update_user(

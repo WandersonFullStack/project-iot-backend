@@ -38,8 +38,8 @@ Pag = Annotated[PagesParams, Depends(_page_params)]
 
 # == HELPERS ===============================================================================
 
-async def _plc_or_404(db: DB, plc_id: int):
-    device = await pc.search_plc(db, plc_id)
+async def _plc_or_404(db: DB, plc_id: int, user_id: int):
+    device = await pc.search_plc(db, plc_id, user_id)
     if not device:
         raise HTTPException(
             status_code=404,
@@ -56,7 +56,7 @@ async def _plc_or_404(db: DB, plc_id: int):
     status_code=status.HTTP_201_CREATED,
     summary="Register a new PLC on the gateway."
 )
-async def create_plc(body: PLCIn, db: DB, _: CurrentUser):
+async def create_plc(body: PLCIn, db: DB, user: CurrentUser):
     """
     Vincula um CLP a um dispositivo já registrado via `device_id`.
     
@@ -67,7 +67,7 @@ async def create_plc(body: PLCIn, db: DB, _: CurrentUser):
     Um mesmo `device_id` pode ter apenas um CLP associado.
     """
     # Verifica se o dispositivo existe
-    device = await dc.search_device(db, body.device_id)
+    device = await dc.search_device(db, body.device_id, user.id)
     if not device:
         raise HTTPException(
             status_code=422,
@@ -98,18 +98,20 @@ async def create_plc(body: PLCIn, db: DB, _: CurrentUser):
 async def list_plcs(
     db: DB,
     pag: Pag,
+    user: CurrentUser,
     active_only: bool = Query(default=True),
-    _: CurrentUser = None
 ):
-    return await pc.list_plcs(db, active_only, pag.limit, pag.offset)
+    return await pc.list_plcs(
+        db, user.id, active_only, pag.limit, pag.offset
+    )
 
 @router.get(
         "/{plc_id}", 
         response_model=PLCOut, 
         summary="Search for a PLC by ID"
 )
-async def search_plc(plc_id: int, db: DB, _: CurrentUser):
-    return await _plc_or_404(db, plc_id)
+async def search_plc(plc_id: int, db: DB, user: CurrentUser):
+    return await _plc_or_404(db, plc_id, user.id)
 
 
 @router.patch(
@@ -117,36 +119,37 @@ async def search_plc(plc_id: int, db: DB, _: CurrentUser):
         response_model=PLCOut, 
         summary="Update PLC fields"
 )
-async def update_plc(plc_id: int, body: PLCUpdate, db: DB, _:CurrentUser):
+async def update_plc(plc_id: int, body: PLCUpdate, db: DB, user: CurrentUser):
     """
     Aceita qualquer subconjunto dos campos -> apenas os não-None são gravados.
     Para desativar sem excluir: `{"active": false}`.
     Desativar o CLP não apaga os registradores, apenas suspende
     o carregamento do mapa no ModbusGateway.
     """
-    await _plc_or_404(db, plc_id)
+    await _plc_or_404(db, plc_id, user.id)
     await pc.update_plc(
         db,
         plc_id,
+        user.id,
         **{k: v for k, v in body.model_dump().items() if v is not None}
     )
     await db.commit()
     
-    return await pc.search_plc(db, plc_id)
+    return await pc.search_plc(db, plc_id, user.id)
 
 @router.delete(
     "/{plc_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Deactive PLC (soft delete)"
 )
-async def remove_plc(plc_id: int, db: DB, _: CurrentUser):
+async def remove_plc(plc_id: int, db: DB, user: CurrentUser):
     """
     Não apaga o registro -> apenas seta àctive=0`.
     Os registradores permanecem no banco para histórico.
     Use PATCH com `{"active": true}` para reativar.
     """
-    await _plc_or_404(db, plc_id)
-    await pc.update_plc(db, plc_id, active=False)
+    await _plc_or_404(db, plc_id, user.id)
+    await pc.update_plc(db, plc_id, user.id, active=False)
     await db.commit()
 
 # == TESTE DE CONEXÃO ====================================================================
@@ -156,7 +159,7 @@ async def remove_plc(plc_id: int, db: DB, _: CurrentUser):
     response_model=TestConnectionOut,
     summary="Test the connection TCP/Modbus com o PLC"
 )
-async def test_connection(plc_id: int, db: DB, _: CurrentUser):
+async def test_connection(plc_id: int, db: DB, user: CurrentUser):
     """
     Abre uma conexão Modbus TCP com o PLC, lê o registrador holding 0
     e fecha a conexão.
@@ -164,7 +167,7 @@ async def test_connection(plc_id: int, db: DB, _: CurrentUser):
     Roda em thread pool (rota síncrona) -> não bloqueia o event loop
     do FastAPI durante o timeout de conexão TCP.
     """
-    plc = await _plc_or_404(db, plc_id)
+    plc = await _plc_or_404(db, plc_id, user.id)
 
     try:
         from pymodbus.client import ModbusTcpClient
@@ -239,7 +242,7 @@ async def test_connection(plc_id: int, db: DB, _: CurrentUser):
     status_code=status.HTTP_201_CREATED,
     summary="Imports multiple registers at once."
 )
-async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: BackgroundTasks, _: CurrentUser):
+async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: BackgroundTasks, user: CurrentUser):
     """
     Usa INSERT OR REPLACE — se o par (clp_id, tipo, endereco) já existir,
     os demais campos são atualizados. Ideal para importar um mapeamento
@@ -249,7 +252,7 @@ async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: Backgr
     Toda a operação roda em uma única transação: ou todos os registradores
     são inseridos ou nenhum é (falha atômica).
     """
-    await _plc_or_404(db, plc_id)
+    await _plc_or_404(db, plc_id, user.id)
     items = [r.model_dump() for r in body.registers]
     total = await pc.create_register_bulk(db, plc_id, items)
 
@@ -266,14 +269,14 @@ async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: Backgr
 async def export_registers_csv(
     plc_id: int,
     db: DB,
+    user: CurrentUser,
     active_only: bool = Query(default=True),
-    _: CurrentUser = None
 ):
     """
     Gera um CSV com todos os registradores do CLP.
     O arquivo pode ser importado de volta via POST /bulk após edição manual.
     """
-    await _plc_or_404(db, plc_id)
+    await _plc_or_404(db, plc_id, user.id)
     rows = await pc.list_registers(db, plc_id, active_only=active_only)
 
     fields = [
@@ -302,14 +305,14 @@ async def list_registers(
     plc_id: int,
     db: DB,
     pag: Pag,
+    user: CurrentUser,
     type: Optional[str] = Query(
         default=None,
         description="Filter by type: holding | coil | input | discrete",
     ),
     active_only: bool = Query(default=True),
-    _: CurrentUser = None
 ):
-    await _plc_or_404(db, plc_id)
+    await _plc_or_404(db, plc_id, user.id)
     rows = await pc.list_registers(db, plc_id, type=type, active_only=active_only,
                              limit=pag.limit, offset=pag.offset)
     return rows
@@ -320,14 +323,14 @@ async def list_registers(
     status_code=status.HTTP_201_CREATED,
     summary="Adds a register to the PLC map."
 )
-async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: BackgroundTasks, _: CurrentUser):
+async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: BackgroundTasks, user: CurrentUser):
     """
     Adiciona um único mapeamento. Para importação em masa, use /bulk.
 
     Retorna 409 Conflict se o par (type, address) já existir para este CLP.
     Use PATCH /{register_id} para atualizar um registrador existente.
     """
-    await _plc_or_404(db, plc_id)
+    await _plc_or_404(db, plc_id, user.id)
     register_id = await pc.create_register(
         db,
         plc_id=plc_id,
@@ -358,7 +361,13 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
     response_model=MapRegisterOut,
     summary="Search a register by ID"
 )
-async def search_register(plc_id: int, register_id: int, db: DB):
+async def search_register(
+    plc_id: int,
+    register_id: int,
+    db: DB,
+    user: CurrentUser,
+):
+    await _plc_or_404(db, plc_id, user.id)
     row = await pc.search_register(db, plc_id, register_id)
     
     if not row:
@@ -380,7 +389,7 @@ async def update_register(
     body: MapRegisterUpdate, 
     db: DB, 
     bg: BackgroundTasks,
-    _: CurrentUser
+    user: CurrentUser
 ):
     """
     Apenas tag_name, tópico, descrição, unidade, escala, offset, qos e ativo
@@ -388,6 +397,7 @@ async def update_register(
     pois identificam unicamente o registrador no protocolo Modbus.
     Para trocar tipo/endereço, delete e recrie.
     """
+    await _plc_or_404(db, plc_id, user.id)
     register = await pc.search_register(db, plc_id, register_id)
 
     if not register:
@@ -414,9 +424,16 @@ async def update_register(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Permanently remove a register."
 )
-async def delete_register(plc_id: int, register_id: int, db: DB, bg: BackgroundTasks, _: CurrentUser):
+async def delete_register(
+    plc_id: int,
+    register_id: int,
+    db: DB,
+    bg: BackgroundTasks,
+    user: CurrentUser,
+):
     """Deleção física -> registrador não têm histórico associado."""
 
+    await _plc_or_404(db, plc_id, user.id)
     register = await pc.delete_register(db, register_id, plc_id)
 
     if not register:

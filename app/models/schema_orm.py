@@ -33,6 +33,7 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
+    devices: Mapped[list["Device"]] = relationship(back_populates="owner")
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
@@ -57,6 +58,14 @@ class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Legacy rows remain quarantined (NULL) until an operator can identify
+    # their real owner. Every new device is created with a non-null owner.
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     device_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
@@ -74,6 +83,7 @@ class Device(Base):
         back_populates="device",
         cascade="all, delete-orphan"
     )
+    owner: Mapped[Optional[User]] = relationship(back_populates="devices")
     messages: Mapped[list[ReceivedMessage]] = relationship(back_populates="device")
     publications: Mapped[list[Publication]] = relationship(back_populates="device")
 

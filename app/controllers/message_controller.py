@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, delete, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schema_orm import ReceivedMessage, Publication
+from app.models.schema_orm import Device, ReceivedMessage, Publication
 
 async def insert_message(
         db: AsyncSession,
@@ -32,12 +32,15 @@ async def insert_message(
 
 async def list_message(
         db: AsyncSession,
+        user_id: int,
         topic: str | None = None,
         limit: int = 10,
         offset: int = 0,
 ) -> list[ReceivedMessage]:
     stmt = (
         select(ReceivedMessage)
+        .join(Device, ReceivedMessage.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
         .order_by(ReceivedMessage.id.desc())
         .limit(limit)
         .offset(offset)
@@ -51,12 +54,15 @@ async def list_message(
 
 async def search_message(
         db: AsyncSession,
-        message_id: int
+        message_id: int,
+        user_id: int,
 ) -> ReceivedMessage | None:
     result = await db.execute(
         select(ReceivedMessage)
+        .join(Device, ReceivedMessage.device_id == Device.device_id)
         .where(
-            ReceivedMessage.id == message_id
+            ReceivedMessage.id == message_id,
+            Device.user_id == user_id,
         )
     )
 
@@ -64,12 +70,16 @@ async def search_message(
 
 async def delete_message(
         db: AsyncSession,
-        message_id: int
+        message_id: int,
+        user_id: int,
 ) -> bool:
     result = await db.execute(
         delete(ReceivedMessage)
         .where(
-            ReceivedMessage.id == message_id
+            ReceivedMessage.id == message_id,
+            ReceivedMessage.device_id.in_(
+                select(Device.device_id).where(Device.user_id == user_id)
+            ),
         )
     )
 
@@ -107,11 +117,14 @@ async def confirm_publication(
 
 async def list_publication(
         db: AsyncSession,
+        user_id: int,
         limit: int = 20,
         offset: int = 0,
 ) -> list[Publication]:
     result = await db.execute(
         select(Publication)
+        .join(Device, Publication.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
         .order_by(Publication.id.desc())
         .limit(limit)
         .offset(offset)
@@ -120,10 +133,13 @@ async def list_publication(
     return list(result.scalars().all())
 
 async def distinct_topics(
-        db: AsyncSession
+        db: AsyncSession,
+        user_id: int,
 ) -> list[str]:
     result = await db.execute(
         select(distinct(ReceivedMessage.topic))
+        .join(Device, ReceivedMessage.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
         .order_by(ReceivedMessage.topic)
     )
 
@@ -131,14 +147,24 @@ async def distinct_topics(
 
 async def count_messages(
         db: AsyncSession,
+        user_id: int,
         topic: str | None = None
 ) -> int:
-    stmt = select(func.count(ReceivedMessage.id))
+    stmt = (
+        select(func.count(ReceivedMessage.id))
+        .join(Device, ReceivedMessage.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
+    )
 
     if topic:
         stmt = stmt.where(ReceivedMessage.topic.like(topic))
 
-    return await db.scalar(stmt)
+    return await db.scalar(stmt) or 0
 
-async def count_publications(db: AsyncSession) -> int:
-    return await db.scalar(select(func.count(Publication.id)))
+async def count_publications(db: AsyncSession, user_id: int) -> int:
+    stmt = (
+        select(func.count(Publication.id))
+        .join(Device, Publication.device_id == Device.device_id)
+        .where(Device.user_id == user_id)
+    )
+    return await db.scalar(stmt) or 0

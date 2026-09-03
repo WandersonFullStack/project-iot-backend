@@ -26,8 +26,8 @@ class CallbacksMQTTContrller:
         self._connected = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
-        # Conjunto de filas - uma por WebSocket conectado.
-        self._ws_queues: set[asyncio.Queue] = set()
+        # Each queue is scoped to the device IDs owned by its authenticated user.
+        self._ws_queues: dict[asyncio.Queue, frozenset[str]] = {}
 
         # Criação do cliente
         self.client = mqtt.Client(
@@ -59,20 +59,26 @@ class CallbacksMQTTContrller:
 
     # -> Registro de WebSocket queues
 
-    def register_ws_queue(self, q: asyncio.Queue):
+    def register_ws_queue(self, q: asyncio.Queue, device_ids: set[str]):
         """Chamado quando um cliente WebSocket conecta."""
-        self._ws_queues.add(q)
+        self._ws_queues[q] = frozenset(device_ids)
 
     def remove_ws_queue(self, q: asyncio.Queue):
         """Chamado quando um cliente WebSocket desconecta."""
-        self._ws_queues.discard(q)
+        self._ws_queues.pop(q, None)
 
     def _broadcast_for_ws(self, data: dict):
         """Envia `data` para todas as filas de WebSocket registradas."""
 
         if not self._loop:
             return
-        for q in list(self._ws_queues):
+        device_id = data.get("device_id")
+        if not device_id:
+            return
+
+        for q, allowed_device_ids in list(self._ws_queues.items()):
+            if device_id not in allowed_device_ids:
+                continue
             try:
                 self._loop.call_soon_threadsafe(q.put_nowait, data)
             except asyncio.QueueFull:
@@ -248,7 +254,7 @@ class CallbacksMQTTContrller:
             try:
                 # Atualizar status do dispositivo se identificado
                 if device_id:
-                    device = await dc.search_device(db, device_id)
+                    device = await dc.search_device_internal(db, device_id)
                     if device and device.active:
                         await dc.update_status(db, device_id, "online")
                         log.info("MSG of device '%s' | topic='%s'", device_id, topic)
@@ -306,6 +312,7 @@ class CallbacksMQTTContrller:
     # PUBLICAÇÃO COM PROPRIEDADES
     async def publish(
             self,
+            device_id: str,
             topic: str,
             payload: str,
             qos: int = 1,
@@ -340,6 +347,7 @@ class CallbacksMQTTContrller:
         # Registrar no banco de forma assíncrona
         self._run_async_task(
             self._register_publication_async(
+                device_id=device_id,
                 topic=topic,
                 payload=payload,
                 qos=qos,
@@ -351,6 +359,7 @@ class CallbacksMQTTContrller:
     
     async def _register_publication_async(
             self,
+            device_id: str,
             topic: str,
             payload: str,
             qos: int,
@@ -360,6 +369,7 @@ class CallbacksMQTTContrller:
             try:
                 await mc.register_publication(
                     db,
+                    device_id=device_id,
                     topic=topic,
                     payload=payload,
                     qos=qos,

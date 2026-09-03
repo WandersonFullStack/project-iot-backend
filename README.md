@@ -30,6 +30,23 @@ expirar. A CA e sua chave permanecem no volume e não entram no repositório.
 > Trocar somente a porta para `8883` não oferece segurança. A proteção vem da
 > validação TLS e da autenticação configuradas neste projeto.
 
+## Isolamento entre usuários
+
+Dispositivos novos pertencem ao usuário autenticado que os criou. PLCs,
+registradores, mensagens, publicações e WebSockets herdam esse isolamento pelo
+dispositivo. Dispositivos anteriores à migration de ownership ficam sem
+proprietário e, por segurança, invisíveis até um backfill manual auditado.
+
+O servidor Modbus TCP bruto não transporta identidade de usuário e fica
+desativado por padrão. Em uma instalação single-tenant ou numa rede industrial
+confiável, ele pode ser habilitado explicitamente com:
+
+```text
+ENABLE_UNSCOPED_MODBUS_GATEWAY=true
+```
+
+Não exponha essa porta à internet nem a usuários de tenants diferentes.
+
 ## Variáveis de ambiente
 
 Copie o exemplo apenas para desenvolvimento local:

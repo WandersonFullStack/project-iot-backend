@@ -148,7 +148,7 @@ class ModbusGateway:
         async with AsyncSessionLocal() as db:
             # Buscar PLC e registrador
             register = await pc.search_register(db, plc_id, register_id)
-            plc = await pc.search_plc(db, plc_id)
+            plc = await pc.search_plc_internal(db, plc_id)
 
             if not register or not plc:
                 return

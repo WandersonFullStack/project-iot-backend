@@ -65,4 +65,4 @@ async def get_current_user(
 
 
 # Aliases tipados -> assinatura das rotas
-CurrentUser = Annotated[dict, Depends(get_current_user)]
+CurrentUser = Annotated[User, Depends(get_current_user)]
