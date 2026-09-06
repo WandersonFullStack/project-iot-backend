@@ -157,6 +157,29 @@ async def update_plc(
 
     return result.rowcount > 0
 
+async def delete_plc(
+    db: AsyncSession,
+    plc_id: int,
+    user_id: int,
+) -> bool:
+    """
+    Deleção fisica do PLC. OS registradores são removidos pelo
+    ON DELETE CASCADE de map_registers.plc_id -> plc.id.
+
+    Para suspender sem perder o mapeamento, use update_plc(active=False).
+    """
+    result = await db.execute(
+        delete(PLC)
+        .where(
+            PLC.id == plc_id,
+            PLC.device_id.in_(
+                select(Device.device_id).where(Device.user_id == user_id)
+            ),
+        )
+    )
+
+    return result.rowcount > 0
+
 # -> REGISTERS
 async def create_register(
         db:AsyncSession,
@@ -311,6 +334,20 @@ async def delete_register(
     )
 
     return result.rowcount > 0
+
+async def delete_all_registers(
+    db: AsyncSession,
+    plc_id: int,
+) -> int:
+    """
+    Limpa o mapa de um PLC sem remover o mesmo.
+    Retorna o tatal removido.
+    """
+    result = await db.execute(
+        delete(MapRegister).where(MapRegister.plc_id == plc_id)
+    )
+
+    return result.rowcount
 
 async def load_map_modbus(
         db: AsyncSession

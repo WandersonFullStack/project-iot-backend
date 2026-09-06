@@ -19,8 +19,7 @@ mqtt_broker_configs = {
     "TLS_ENABLED": _env_bool("MQTT_TLS_ENABLED"),
     "CA_CERT": os.getenv("MQTT_CA_CERT"),
     "TOPIC": [
-        ("application/devices/#", 1),   # (tópico, QoS)
-        ("application/devices/#", 2),
+        ("application/devices/#", 2),   # (tópico, QoS)
     ],    
     "DB_PATH": "mqtt_data.db"
 }

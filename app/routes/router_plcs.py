@@ -14,6 +14,7 @@ from app.models.schemas import (
     MapRegisterOut, MapRegisterUpdate, MapBulkIn,
     TestConnectionOut, PagesParams
 )
+from app.services.gateway_runtime import reload_map_modbus
 from app.config.broker_configs import log
 from app.config.modbus_configs import _OFFSET_MODBUS as offset_mb
 from app.auth.dependencies.depends import CurrentUser
@@ -140,17 +141,36 @@ async def update_plc(plc_id: int, body: PLCUpdate, db: DB, user: CurrentUser):
 @router.delete(
     "/{plc_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Deactive PLC (soft delete)"
+    summary="Deactive or permanently delete a PLC"
 )
-async def remove_plc(plc_id: int, db: DB, user: CurrentUser):
+async def remove_plc(
+    plc_id: int, 
+    db: DB, 
+    bg: BackgroundTasks,
+    user: CurrentUser,
+    permanent: bool = Query(
+        default=False,
+        description="If true, deletes the PLC and all of its registers.",
+    ),
+):
     """
-    Não apaga o registro -> apenas seta àctive=0`.
-    Os registradores permanecem no banco para histórico.
+    Por padrão apenas seta àctive=false` -> os
+    registradores permanecem no banco para histórico e
+    o mapa deixa de ser carregado no ModbusGateway.
     Use PATCH com `{"active": true}` para reativar.
+
+    Com `?permanent=true`a linha é removida do banco e o ON DELETE CASCADE
+    apaga todos os registradores do PLC. Operação irreversivel.
     """
     await _plc_or_404(db, plc_id, user.id)
-    await pc.update_plc(db, plc_id, user.id, active=False)
+
+    if permanent:
+        await pc.delete_plc(db, plc_id, user_id)
+    else:
+        await pc.update_plc(db, plc_id, user.id, active=False)
+    
     await db.commit()
+    bg.add_task(reload_map_modbus)
 
 # == TESTE DE CONEXÃO ====================================================================
 
@@ -257,7 +277,7 @@ async def bulk_create_registers(plc_id: int, body: MapBulkIn, db: DB, bg: Backgr
     total = await pc.create_register_bulk(db, plc_id, items)
 
     await db.commit()
-    bg.add_task(pc.load_map_modbus, db)
+    bg.add_task(reload_map_modbus)
     
     return {"plc_id": plc_id, "inserted_or_updated": total}
 
@@ -352,7 +372,7 @@ async def create_registers(plc_id: int, body: MapRegisterIn, db: DB, bg: Backgro
             detail=f"Register {body.type.value} address {body.address} There is already a patch for this PLC. Use the PATCH to update it."
         )
     await db.commit()
-    bg.add_task(pc.load_map_modbus, db)
+    bg.add_task(reload_map_modbus)
 
     return await pc.search_register(db, plc_id, register_id)
 
@@ -415,9 +435,31 @@ async def update_register(
         **fields,
     )
     await db.commit()
-    bg.add_task(pc.load_map_modbus, db)
+    bg.add_task(reload_map_modbus)
 
     return await pc.search_register(db, plc_id, register_id)
+
+@router.delete(
+    "/{plc_id}/registers",
+    summary="Remove every registers from a PLC map."
+)
+async def delete_all_registers(
+    plc_id: int,
+    db: DB,
+    bg: BackgroundTasks,
+    user: CurrentUser,
+):
+    """
+    Limpa o mapeamento inteiro mantendo o PLC cadastrado.
+    Util antes de reimportar um mapa via POST /bulk.
+    """
+    await _plc_or_404(db, plc_id, user_id)
+    total = await pc.delete_all_registers(db, plc_id)
+
+    await db.commit()
+    bg.add_task(reload_map_modbus)
+
+    return {"plc_id": plc_id, "deleted": total}
 
 @router.delete(
     "/{plc_id}/registers/{register_id}",
@@ -443,5 +485,5 @@ async def delete_register(
         )
     
     await db.commit()
-    bg.add_task(pc.load_map_modbus, db)
+    bg.add_task(reload_map_modbus)
     

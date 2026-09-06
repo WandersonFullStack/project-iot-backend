@@ -52,4 +52,10 @@ class ReplacePasswordIn(BaseModel):
             raise ValueError("The new password must be different from the current one.")
         
         return value
-    
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(..., description="Corrent password, for confirmation")
+    confirm: Literal["DELETE"] = Field(
+        ...,
+        description="Type DELETE to confirm the irreversible removal",
+    )

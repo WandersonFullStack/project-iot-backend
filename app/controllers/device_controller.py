@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 
 from app.models.schema_orm import Device, ReceivedMessage, PLC
 
@@ -133,6 +133,26 @@ async def update_device(
 
     return result.rowcount > 0
 
+async def delete_device(
+    db: AsyncSession,
+    device_id: str,
+    user_id: int,
+) -> bool:
+    """
+    Deleção fisica do dispositivo. O ON DELETE CASCADE remove em sequencia
+    os PLCs, os registradores desses PLCs, e o histórico de mensagens e
+    publicações vinculado ao device_id.
+
+    Para desativar sem perder o histórico, use update_device(active=False).
+    """
+    result = await db.execute(
+        delete(Device).where(
+            Device.device_id == device_id,
+            Device.user_id == user_id,
+        )
+    )
+
+    return result.rowcount > 0
 
 async def search_device_plc(
         db: AsyncSession,

@@ -31,9 +31,14 @@ class User(Base):
 
     tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
-    devices: Mapped[list["Device"]] = relationship(back_populates="owner")
+    devices: Mapped[list["Device"]] = relationship(
+        back_populates="owner",
+        cascade="all, delete",
+        passive_deletes=True,
+    )
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
@@ -43,7 +48,9 @@ class RefreshToken(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE")
+    )
     token_hash: Mapped[str] = mapped_column(String, unique=True)
     created_in: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -62,7 +69,7 @@ class Device(Base):
     # their real owner. Every new device is created with a non-null owner.
     user_id: Mapped[Optional[int]] = mapped_column(
         Integer,
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -81,11 +88,20 @@ class Device(Base):
 
     plcs: Mapped[list["PLC"]] = relationship(
         back_populates="device",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     owner: Mapped[Optional[User]] = relationship(back_populates="devices")
-    messages: Mapped[list[ReceivedMessage]] = relationship(back_populates="device")
-    publications: Mapped[list[Publication]] = relationship(back_populates="device")
+    messages: Mapped[list[ReceivedMessage]] = relationship(
+        back_populates="device",
+        cascade="all, delete",
+        passive_deletes=True,
+    )
+    publications: Mapped[list[Publication]] = relationship(
+        back_populates="device",
+        cascade="all, delete",
+        passive_deletes=True,
+    )
 
 class PLC(Base):
     __tablename__ = "plcs"
@@ -94,7 +110,9 @@ class PLC(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.device_id"))
+    device_id: Mapped[str] = mapped_column(
+        String, ForeignKey("devices.device_id", ondelete="CASCADE")
+    )
     name: Mapped[str] = mapped_column(String(80))
     description: Mapped[Optional[str]] = mapped_column(Text)
     ip: Mapped[str] = mapped_column(String(45))
@@ -111,7 +129,9 @@ class PLC(Base):
 
     device: Mapped[Device] = relationship(back_populates="plcs")
     registers: Mapped[list[MapRegister]] = relationship(
-        back_populates="plc", cascade="all, delete-orphan"
+        back_populates="plc", 
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
 class MapRegister(Base):
@@ -123,7 +143,9 @@ class MapRegister(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plc_id: Mapped[int] = mapped_column(Integer, ForeignKey("plcs.id"))
+    plc_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plcs.id", ondelete="CASCADE")
+    )
     type: Mapped[str] = mapped_column(String(20))
     tag_name: Mapped[str] = mapped_column(String(30))
     address: Mapped[int] = mapped_column(Integer)
@@ -157,7 +179,7 @@ class ReceivedMessage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     device_id: Mapped[Optional[str]] = mapped_column(
-        String, ForeignKey("devices.device_id")
+        String, ForeignKey("devices.device_id", ondelete="CASCADE")
     )
     topic: Mapped[str] = mapped_column(String)
     payload: Mapped[Optional[str]] = mapped_column(Text)
@@ -180,7 +202,7 @@ class Publication(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     device_id: Mapped[Optional[str]] = mapped_column(
-        String, ForeignKey("devices.device_id")
+        String, ForeignKey("devices.device_id", ondelete="CASCADE")
     )
     topic: Mapped[str] = mapped_column(String)
     payload: Mapped[Optional[str]] = mapped_column(Text)

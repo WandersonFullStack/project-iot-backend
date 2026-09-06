@@ -3,11 +3,12 @@ import uuid
 import json
 from typing import Annotated, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import AsyncSessionLocal
 from app.controllers import device_controller as dc, plc_controller as pc
+from app.services.gateway_runtime import reload_map_modbus
 
 from app.models.schemas import (
     DeviceIn, DeviceUpdate, DeviceOut,
@@ -146,6 +147,34 @@ async def update_device(device_id: str, body: DeviceUpdate, db: DB, user: Curren
 
     device = await dc.search_device(db, device_id, user.id)
     return device
+
+# -> Delete ==================================================
+@router.delete(
+    "/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a device and everything under it"
+)
+async def delete_device(
+    device_id: str,
+    db: DB,
+    bg: BackgroundTasks,
+    user: CurrentUser,
+):
+    """
+    Remove em cascata o PLC vinculado, os registradores desse PLC e todo o
+    histórico de mensagens e publicações do dispositivo. Irreversivel.
+
+    Para apenas suspender o dispositivo, use PATCH com `{"active": false}`.
+    """
+    ok = await dc.delete_device(db, device_id, user.id)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Device not found."
+        )
+    
+    await db.commit()
+    bg.add_task(reload_map_modbus)
 
 # -> Renovar api_key =========================================
 @router.post(

@@ -35,6 +35,11 @@ from app.config.broker_configs import log, mqtt_broker_configs as config
 from app.services.tcp_gateway import TCPGateway
 from app.services.modbus_gateway import ModbusGateway, MapRegister
 from app.services.protocol_bridge import ProtocolBridge
+from app.services.gateway_runtime import (
+    ENABLE_UNSCOPED_MODBUS_GATEWAY,
+    bridge, modbus_gw, mqtt,
+    reload_map_modbus, tcp_gw,
+)
 
 from app.routes.router_devices import router as devices_router
 from app.routes.router_plcs import router as plcs_router
@@ -43,24 +48,6 @@ from app.routes.router_users import router as users_router
 
 from app.auth.user_auth import hash_password, decode_token
 from app.auth.dependencies.depends import CurrentUser
-
-# == INSTÂNCIAS GLOBAIS ===============================================
-
-mqtt = CallbacksMQTTContrller()
-bridge = ProtocolBridge(mqtt)
-tcp_gw = TCPGateway(
-    bridge,
-    host=os.getenv("TCP_GATEWAY_HOST", "0.0.0.0"),
-    port=int(os.getenv("TCP_GATEWAY_PORT", "9000")),
-)
-modbus_gw = ModbusGateway(
-    bridge,
-    host=os.getenv("MODBUS_HOST", "0.0.0.0"),
-    port=int(os.getenv("MODBUS_PORT", "502")),
-)
-ENABLE_UNSCOPED_MODBUS_GATEWAY = (
-    os.getenv("ENABLE_UNSCOPED_MODBUS_GATEWAY", "false").lower() == "true"
-)
 
 # == MANAGED DEPENDENCIES =============================================
 
@@ -85,29 +72,7 @@ async def _monitor_offline_devices(timeout_min: int = 5) -> None:
 
         log.info(f"Offline devices monitoring: checked at {datetime.now().isoformat()}")
 
-async def reload_map_modbus() -> None:
-    """
-    Carrega o mapa atual do banco e reconstrói o datastore do ModbusGateway.
-    Chamada após criar/atualizar/deletar registradores via API.
-    Executa em background para não bloquear a resposta HTTP.
-    """
-    if not ENABLE_UNSCOPED_MODBUS_GATEWAY:
-        return
 
-    async with AsyncSessionLocal() as db:
-        registers = await pc.load_map_modbus(db)
-        new_map = [
-            MapRegister(
-                address = r["address"],
-                topic = r["topic"],
-                unit = r["unit"] or "",
-                scale = r["scale"],
-                device_id = r["device_id"],
-            )
-            for r in registers
-        ]
-        modbus_gw.map = new_map
-        log.info(f"Map Modbus reloaded: {len(new_map)} registers active.")
 
 # == LIFESPAN -> startup e shutdown gerenciados pelo FastAPI===========
 @asynccontextmanager

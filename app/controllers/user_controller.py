@@ -88,6 +88,24 @@ async def count_users(db: AsyncSession) -> int:
 
     return result.scalar_one()
 
+async def delete_user(
+    db: AsyncSession,
+    user_id: int,
+) -> bool:
+    """
+    Deleção definitiva da conta. O ON DELETE CASCADE propaga para
+    refresh_tokens e devices -> plcs -> map_registers, alem do histórico
+    de mensagens e publicações.
+
+    Dispositivos legados em quarentena (user_id NULL) não pertencem a
+    nenhum usuário e sobrevivem intencionalmente a esta operação.
+    """
+    result = await db.execute(
+        delete(User).where(User.id == user_id)
+    )
+
+    return result.rowcount > 0
+
 async def create_refresh_token(
         db: AsyncSession,
         user_id: int,

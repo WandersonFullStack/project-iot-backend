@@ -8,7 +8,10 @@ from app.config.database import AsyncSessionLocal
 from app.auth.user_auth import hash_password, verify_password
 from app.controllers import user_controller as uc
 from app.auth.dependencies.depends import CurrentUser
-from app.models.schema_users import UserIn, UserOut, UserUpdate, ReplacePasswordIn
+from app.models.schema_users import (
+    UserIn, UserOut, UserUpdate, 
+    ReplacePasswordIn, DeleteAccountIn
+)
 from app.models.schemas import PagesParams
 
 router = APIRouter(prefix="/api/v1/users", tags=["Users"])
@@ -159,4 +162,32 @@ async def chande_own_password(
         db,
         user.id
     )
+    await db.commit()
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete own account and all associated data"
+)
+async def delete_own_account(
+    body: DeleteAccountIn,
+    db: DB,
+    user: CurrentUser,
+):
+    """
+    Exige a senha atual como confirmação. Remove em cascata os refresh-tokens,
+    os dispositivos do usuário e, sob cada dispositivo, o PLC, os
+    registradores e todo o histórico de menssagens e publicações.
+
+    Os tokens de acesso ja emitidos param de funcionar imediatamente porque
+    `get_account_user` revalida a existência do usuário no banco
+    a cada requisição. Operação irreversivel.
+    """
+    if not varify_password(body.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect.",
+        )
+
+    await uc.delete_user(db, user_id)
     await db.commit()
