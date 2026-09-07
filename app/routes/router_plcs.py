@@ -2,6 +2,7 @@ from __future__ import annotations
 import csv
 import io
 import time
+import asyncio
 from typing import Annotated, Optional, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, BackgroundTasks
@@ -12,9 +13,10 @@ from app.controllers import plc_controller as pc, device_controller as dc
 from app.models.schemas import (
     PLCIn, PLCOut, PLCUpdate, MapRegisterIn,
     MapRegisterOut, MapRegisterUpdate, MapBulkIn,
-    TestConnectionOut, PagesParams
+    TestConnectionOut, PLCStatusOut, PagesParams
 )
 from app.services.gateway_runtime import reload_map_modbus
+from app.services.plc_health import check_plc
 from app.config.broker_configs import log
 from app.config.modbus_configs import _OFFSET_MODBUS as offset_mb
 from app.auth.dependencies.depends import CurrentUser
@@ -107,6 +109,42 @@ async def list_plcs(
     )
 
 @router.get(
+    "/status",
+    response_model=list[PLCStatusOut],
+    summary="Connection status of every registered PLC",
+)
+async def status_all_plcs(
+    db: DB,
+    pag: Pag,
+    user: CurrentUser,
+    deep: bool = Query(
+        default=False, 
+        description="Also read holding 0 to confirme the slave answers"
+    ),
+):
+    plcs = await pc.list_plcs(db, user.id, True, pag.limit, pag.offset)
+
+    return await asyncio.gather(*(check_plc(plc, deep) for plc in plcs))
+
+@router.get(
+    "/{plc_id}/status",
+    response_model=PLCStatusOut,
+    summary="check whether a PLC is reachable",
+)
+async def status_plc(
+    plc_id: int,
+    db: DB,
+    user: CurrentUser,
+    deep: bool = Query(default=False),
+    force: bool = Query(
+        default=False, description="Ignore the cached result"
+    ),
+):
+    plc = await _plc_or_404(db, plc_id, user.id)
+
+    return await check_plc(plc, deep=deep, force=force)
+
+@router.get(
         "/{plc_id}", 
         response_model=PLCOut, 
         summary="Search for a PLC by ID"
@@ -165,7 +203,7 @@ async def remove_plc(
     await _plc_or_404(db, plc_id, user.id)
 
     if permanent:
-        await pc.delete_plc(db, plc_id, user_id)
+        await pc.delete_plc(db, plc_id, user.id)
     else:
         await pc.update_plc(db, plc_id, user.id, active=False)
     

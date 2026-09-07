@@ -139,6 +139,19 @@ class TestConnectionOut(BaseModel):
     time_ms: Optional[float] = None
     value_reg0: Optional[int] = None    # valor bruto do registrador 0 (holding)
 
+class PLCStatusOut(BaseModel):
+    plc_id: int
+    name: str
+    connected: bool
+    message: str
+    ip: str
+    port: int
+    unit_id: int
+    latency_ms: Optional[float] = None
+    value_reg0: Optional[int] = None
+    checked_at: datetime
+    cached: bool = False
+
 class DeviceIn(BaseModel):
     """Payload para registrar um novo dispositivo."""
     name: str = Field(..., min_length=2, max_length=80, examples=["Room sensor"])
